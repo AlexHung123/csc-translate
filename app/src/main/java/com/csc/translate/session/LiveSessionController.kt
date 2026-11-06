@@ -1,15 +1,31 @@
 package com.csc.translate.session
 
 import android.app.Application
+import android.media.projection.MediaProjection
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.annotation.RequiresApi
 import com.csc.translate.R
+import com.csc.translate.audio.AudioCapture
 import com.csc.translate.audio.PcmRecorder
+import com.csc.translate.audio.PlaybackRecorder
+import com.csc.translate.audio.SystemAudio
+import com.csc.translate.data.HearSource
+import com.csc.translate.data.Pipeline
 import com.csc.translate.data.SettingsStore
 import com.csc.translate.data.db.SessionDao
 import com.csc.translate.data.db.SessionEntity
 import com.csc.translate.net.Handshake
+import com.csc.translate.pipeline.IndexTranslator
+import com.csc.translate.pipeline.QwenAsr
+import com.csc.translate.pipeline.Silero
+import com.csc.translate.pipeline.StretchSession
+import com.csc.translate.pipeline.mono
+import com.csc.translate.pipeline.probeAsr
+import com.csc.translate.pipeline.readWav
+import com.csc.translate.pipeline.resample16
 import com.csc.translate.net.Health
 import com.csc.translate.net.ServerEvent
 import com.csc.translate.net.SimulInferApi
@@ -70,13 +86,16 @@ class LiveSessionController(
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     private var socket: TranslateSocket? = null
-    private var recorder: PcmRecorder? = null
+    private var asr: StretchSession? = null
+    private var recorder: AudioCapture? = null
+    private var hearSystem = false
     private var timerJob: Job? = null
     private var handshakeTimeout: Job? = null
     private var runJob: Job? = null
     private val paused = AtomicBoolean(false)
     private var silenceFrame: ByteArray = ByteArray(0)
     private var sessionId: String = ""
+    private var sessionUrl: String = ""
     private var startedAt: Long = 0L
     private var pausedAt: Long? = null
     private var pausedFor: Long = 0L
@@ -147,6 +166,7 @@ class LiveSessionController(
         pausedFor = 0L
         sessionId = UUID.randomUUID().toString()
         startedAt = System.currentTimeMillis()
+        hearSystem = false
     }
 
     private suspend fun startInternal() {
@@ -157,8 +177,19 @@ class LiveSessionController(
             direction = user.direction,
             startedAt = startedAt,
         )
+        if (user.hearSource == HearSource.System && !prepareSystem()) return
 
-        val health: Health = runCatching { api.health(user.baseUrl) }.getOrElse {
+        val endpoint = user.activeUrl()
+        if (endpoint.isBlank()) {
+            failToIdle(app.getString(R.string.connect_fail))
+            return
+        }
+        sessionUrl = endpoint
+        if (user.pipeline == Pipeline.Tomoru) {
+            startAsr(user.direction, endpoint)
+            return
+        }
+        val health: Health = runCatching { api.health(endpoint) }.getOrElse {
             Log.w(TAG, "health failed", it)
             failToIdle(app.getString(R.string.connect_fail))
             return
@@ -169,13 +200,13 @@ class LiveSessionController(
             return
         }
 
-        val rate = PcmRecorder.pickSampleRate() ?: run {
-            failToIdle(app.getString(R.string.mic_fail))
+        val rate = inputRate() ?: run {
+            failToIdle(app.getString(if (hearSystem) R.string.system_audio_fail else R.string.mic_fail))
             return
         }
         silenceFrame = ByteArray(rate / 10 * 2)
         sessionOpen.set(true)
-        MicCaptureService.start(app)
+        if (!hearSystem) MicCaptureService.start(app)
 
         val handshake = Handshake(
             direction = user.direction,
@@ -186,7 +217,7 @@ class LiveSessionController(
         socket = TranslateSocket(
             client = http,
             json = json,
-            baseUrl = user.baseUrl,
+            baseUrl = endpoint,
             handshake = handshake,
             onEvent = { event -> scope.launch { handleEvent(event) } },
             onDisconnected = { reason ->
@@ -222,7 +253,17 @@ class LiveSessionController(
             startedAt = startedAt,
         )
 
-        val health: Health = runCatching { api.health(user.baseUrl) }.getOrElse {
+        val endpoint = user.activeUrl()
+        if (endpoint.isBlank()) {
+            failToIdle(app.getString(R.string.connect_fail))
+            return
+        }
+        sessionUrl = endpoint
+        if (user.pipeline == Pipeline.Tomoru) {
+            startAsrFile(uri, user.direction, endpoint, myId)
+            return
+        }
+        val health: Health = runCatching { api.health(endpoint) }.getOrElse {
             Log.w(TAG, "health failed", it)
             if (sessionId != myId) return
             failToIdle(app.getString(R.string.connect_fail))
@@ -257,7 +298,7 @@ class LiveSessionController(
 
         val submit = runCatching {
             api.submitFile(
-                baseUrl = user.baseUrl,
+                baseUrl = endpoint,
                 file = copied.file,
                 filename = copied.filename,
                 mime = mime,
@@ -267,7 +308,7 @@ class LiveSessionController(
             )
         }
         if (sessionId != myId) {
-            submit.getOrNull()?.let { runCatching { api.cancelTask(user.baseUrl, it.taskId) } }
+            submit.getOrNull()?.let { runCatching { api.cancelTask(endpoint, it.taskId) } }
             copied.file.delete()
             return
         }
@@ -283,7 +324,7 @@ class LiveSessionController(
         }
         uploadTaskId = body.taskId
         _state.update { it.copy(phase = Phase.Live, fromFile = true) }
-        pollUntilDone(user.baseUrl, body.taskId)
+        pollUntilDone(endpoint, body.taskId)
     }
 
     private data class CopiedUpload(val file: File, val filename: String)
@@ -405,12 +446,213 @@ class LiveSessionController(
         }
     }
 
-    private fun startCapture() {
-        val rec = PcmRecorder(
-            onFrame = { frame ->
-                val payload = if (paused.get()) silenceFrame else frame
-                socket?.sendPcm(payload)
+    private suspend fun startAsr(direction: String, endpoint: String) {
+        val up = runCatching { withContext(Dispatchers.IO) { probeAsr(http, endpoint) } }
+        if (sessionId.isBlank()) return
+        if (up.isFailure) {
+            Log.w(TAG, "asr probe failed", up.exceptionOrNull())
+            failToIdle(app.getString(R.string.connect_fail))
+            return
+        }
+        val rate = inputRate() ?: run {
+            failToIdle(app.getString(if (hearSystem) R.string.system_audio_fail else R.string.mic_fail))
+            return
+        }
+        silenceFrame = ByteArray(rate / 10 * 2)
+        val voice = openSilero(sessionId) ?: return
+        ready = true
+        sessionOpen.set(true)
+        if (!hearSystem) MicCaptureService.start(app)
+        asr = newAsrSession(direction, endpoint, voice)
+        _state.update { it.copy(phase = Phase.Live) }
+        startCapture()
+    }
+
+    private suspend fun startAsrFile(uri: Uri, direction: String, endpoint: String, myId: String) {
+        val up = runCatching { withContext(Dispatchers.IO) { probeAsr(http, endpoint) } }
+        if (sessionId != myId) return
+        if (up.isFailure) {
+            Log.w(TAG, "asr probe failed", up.exceptionOrNull())
+            failToIdle(app.getString(R.string.connect_fail))
+            return
+        }
+        val copied = runCatching { copyUpload(uri) }.getOrElse { error ->
+            Log.w(TAG, "copy upload", error)
+            if (sessionId != myId) return
+            val msg = if (error.message == "too_large") {
+                app.getString(R.string.file_too_large)
+            } else {
+                app.getString(R.string.file_read_fail)
+            }
+            failToIdle(msg)
+            return
+        }
+        if (sessionId != myId) {
+            copied.file.delete()
+            return
+        }
+        tempUpload = copied.file
+        val wav = withContext(Dispatchers.IO) { readWav(copied.file.readBytes()) }
+        if (sessionId != myId) return
+        if (wav == null) {
+            failToIdle(app.getString(R.string.file_read_fail))
+            return
+        }
+        val pcm = resample16(mono(wav.pcm, wav.channels), wav.rate)
+        if (sessionId != myId) return
+        val voice = openSilero(myId) ?: return
+        sessionOpen.set(true)
+        ready = true
+        startTimer()
+        val session = newAsrSession(direction, endpoint, voice)
+        asr = session
+        _state.update { it.copy(phase = Phase.Live, fromFile = true) }
+        session.write(pcm)
+        runCatching { session.finish() }
+        if (!sessionOpen.get()) return
+        persist()
+        teardown(save = false)
+    }
+
+    private suspend fun openSilero(expected: String): Silero? {
+        val voice = runCatching {
+            withContext(Dispatchers.IO) {
+                app.assets.open("silero_vad.onnx").use { Silero(it.readBytes()) }
+            }
+        }.getOrElse {
+            Log.w(TAG, "silero", it)
+            if (sessionId == expected) failToIdle(app.getString(R.string.silero_fail))
+            return null
+        }
+        if (sessionId != expected) {
+            voice.close()
+            return null
+        }
+        return voice
+    }
+
+    private fun newAsrSession(direction: String, endpoint: String, voice: Silero): StretchSession {
+        val parts = direction.split("-", limit = 2)
+        val src = parts.getOrElse(0) { "zh" }
+        val tgt = parts.getOrElse(1) { "en" }
+        val recognizer = QwenAsr(http, endpoint)
+        val translator = IndexTranslator(http, src, tgt)
+        return StretchSession(
+            parent = scope,
+            srcLang = src,
+            tgtLang = tgt,
+            decode = { recognizer.transcribe(it) },
+            translate = { text, draft -> translator.translate(text, draft) },
+            voice = voice,
+            onView = { source, target ->
+                scope.launch {
+                    if (!sessionOpen.get()) return@launch
+                    transcript = Transcript(source, target)
+                    publishTranscript()
+                }
             },
+            onError = {
+                scope.launch {
+                    if (!sessionOpen.get()) return@launch
+                    _messages.emit(app.getString(R.string.asr_fail))
+                    teardown(save = transcript.isEmpty.not())
+                }
+            },
+        )
+    }
+
+    private fun inputRate(): Int? = if (hearSystem) {
+        (recorder as? PlaybackRecorder)?.sampleRate?.takeIf { it > 0 }
+    } else {
+        PcmRecorder.pickSampleRate()
+    }
+
+    private suspend fun prepareSystem(): Boolean {
+        if (Build.VERSION.SDK_INT < 29) {
+            failToIdle(app.getString(R.string.system_audio_unavailable))
+            return false
+        }
+        hearSystem = true
+        SystemAudio.onRevoked = {
+            scope.launch {
+                if (_state.value.phase == Phase.Idle && recorder == null) return@launch
+                _messages.emit(app.getString(R.string.system_audio_stopped))
+                teardown(save = transcript.isEmpty.not())
+            }
+        }
+        val projection = SystemAudio.await()
+        if (projection == null) {
+            failToIdle(app.getString(R.string.system_audio_fail))
+            return false
+        }
+        val rec = openPlayback(projection)
+        if (rec == null) {
+            failToIdle(app.getString(R.string.system_audio_fail))
+            return false
+        }
+        recorder = rec
+        return true
+    }
+
+    @RequiresApi(29)
+    private fun openPlayback(projection: MediaProjection): PlaybackRecorder? {
+        lateinit var rec: PlaybackRecorder
+        rec = PlaybackRecorder(
+            projection = projection,
+            onFrame = { frame -> deliver(frame, rec.sampleRate) },
+            onError = {
+                scope.launch {
+                    _messages.emit(app.getString(R.string.system_audio_stopped))
+                    teardown(save = transcript.isEmpty.not())
+                }
+            },
+        )
+        val opened = runCatching { rec.open() }
+            .onFailure { Log.w(TAG, "playback open", it) }
+            .getOrDefault(false)
+        if (!opened) {
+            rec.stop()
+            return null
+        }
+        return rec
+    }
+
+    private fun deliver(frame: ByteArray, rate: Int) {
+        val payload = if (paused.get()) silenceFrame else frame
+        val session = asr
+        if (session != null) {
+            session.write(resample16(payload, rate))
+        } else {
+            socket?.sendPcm(payload)
+        }
+    }
+
+    private fun startCapture() {
+        if (hearSystem) {
+            val rec = recorder as? PlaybackRecorder
+            if (rec == null) {
+                scope.launch {
+                    _messages.emit(app.getString(R.string.system_audio_fail))
+                    teardown(save = false)
+                }
+                return
+            }
+            try {
+                rec.start()
+            } catch (t: Throwable) {
+                Log.w(TAG, "playback start", t)
+                scope.launch {
+                    _messages.emit(app.getString(R.string.system_audio_fail))
+                    teardown(save = false)
+                }
+                return
+            }
+            startTimer()
+            return
+        }
+        lateinit var rec: PcmRecorder
+        rec = PcmRecorder(
+            onFrame = { frame -> deliver(frame, rec.sampleRate) },
             onError = { message ->
                 scope.launch {
                     _messages.emit(message)
@@ -450,6 +692,13 @@ class LiveSessionController(
         paused.set(false)
         recorder?.stop()
         recorder = null
+        val session = asr
+        if (session != null) {
+            runCatching { session.finish() }
+            persist()
+            teardown(save = false)
+            return
+        }
         if (fromFile) {
             persist()
             teardown(save = false)
@@ -497,12 +746,17 @@ class LiveSessionController(
             if (job != null && job != coroutineContext[Job]) {
                 job.cancel()
             }
+            SystemAudio.onRevoked = null
             recorder?.stop()
             recorder = null
+            SystemAudio.release()
+            asr?.stop()
+            asr = null
             socket?.close()
             socket = null
             val taskId = uploadTaskId
-            val baseUrl = runCatching { settings.current().baseUrl }.getOrNull()
+            val baseUrl = sessionUrl.ifBlank { null }
+            sessionUrl = ""
             uploadTaskId = null
             if (taskId != null && baseUrl != null) {
                 runCatching { api.cancelTask(baseUrl, taskId) }
@@ -511,6 +765,7 @@ class LiveSessionController(
             tempUpload = null
             if (save) persist()
             MicCaptureService.stop(app)
+            hearSystem = false
             ready = false
             finishing = false
             fromFile = false

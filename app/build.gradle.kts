@@ -17,6 +17,10 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            // Silero's runtime is large. The pad is arm64, so the other ABIs stay out.
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -75,6 +79,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.opencc4j)
+    implementation(libs.onnxruntime.android)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.serialization.json)
 }

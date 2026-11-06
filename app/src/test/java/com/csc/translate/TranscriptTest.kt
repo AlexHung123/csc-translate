@@ -27,6 +27,14 @@ class TranscriptTest {
     }
 
     @Test
+    fun fullTextReplacesTheTranslation() {
+        val after = Transcript(sourceRaw = "他说", targetRaw = "He said")
+            .applyEvent(ServerEvent(event = "chunk", sourceTextFull = "他说，你好。", fullText = "He said hello."))
+        assertEquals("他说，你好。", after.sourceRaw)
+        assertEquals("He said hello.", after.targetRaw)
+    }
+
+    @Test
     fun doneReplacesBoth() {
         val after = Transcript(sourceRaw = "partial", targetRaw = "part")
             .applyEvent(ServerEvent(event = "done", sourceText = "全文。", fullText = "Full."))

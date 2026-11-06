@@ -3,6 +3,8 @@ package com.csc.translate.ui
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionConfig
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.BackHandler
@@ -34,6 +36,9 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.csc.translate.AppViewModel
 import com.csc.translate.R
+import com.csc.translate.audio.SystemAudio
+import com.csc.translate.data.HearSource
+import com.csc.translate.service.MicCaptureService
 import com.csc.translate.session.Phase
 
 private const val ROUTE_IDLE = "idle"
@@ -59,9 +64,42 @@ fun AppRoot(viewModel: AppViewModel) {
     var confirmStop by remember { mutableStateOf(false) }
 
     var micDenied by remember { mutableStateOf(false) }
+    var systemDenied by remember { mutableStateOf(false) }
+    var pendingSystem by remember { mutableStateOf(false) }
+    val projectionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val data = result.data
+        if (result.resultCode != Activity.RESULT_OK || data == null) {
+            systemDenied = true
+            return@rememberLauncherForActivityResult
+        }
+        SystemAudio.prepare()
+        MicCaptureService.startSystem(context, result.resultCode, data)
+        viewModel.startSession()
+    }
+    fun launchSystemCapture() {
+        val activity = context as? Activity ?: return
+        if (Build.VERSION.SDK_INT < 29) {
+            systemDenied = true
+            return
+        }
+        val manager = activity.getSystemService(MediaProjectionManager::class.java) ?: return
+        val intent = if (Build.VERSION.SDK_INT >= 34) {
+            manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForUserChoice())
+        } else {
+            manager.createScreenCaptureIntent()
+        }
+        projectionLauncher.launch(intent)
+    }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
+        if (pendingSystem) {
+            pendingSystem = false
+            launchSystemCapture()
+            return@rememberLauncherForActivityResult
+        }
         when (result[Manifest.permission.RECORD_AUDIO]) {
             true -> viewModel.startSession()
             false -> micDenied = true
@@ -77,6 +115,12 @@ fun AppRoot(viewModel: AppViewModel) {
         if (micDenied) {
             snackbar.showSnackbar(context.getString(R.string.need_mic))
             micDenied = false
+        }
+    }
+    LaunchedEffect(systemDenied) {
+        if (systemDenied) {
+            snackbar.showSnackbar(context.getString(R.string.system_audio_denied))
+            systemDenied = false
         }
     }
 
@@ -100,6 +144,24 @@ fun AppRoot(viewModel: AppViewModel) {
     }
 
     fun requestStart() {
+        if (settings.hearSource == HearSource.System) {
+            if (Build.VERSION.SDK_INT < 29) {
+                systemDenied = true
+                return
+            }
+            val needNotification = Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) != PackageManager.PERMISSION_GRANTED
+            if (needNotification) {
+                pendingSystem = true
+                permissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+                return
+            }
+            launchSystemCapture()
+            return
+        }
         val micOk = ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.RECORD_AUDIO,
@@ -147,6 +209,7 @@ fun AppRoot(viewModel: AppViewModel) {
                         }
                     },
                     onSettings = { showSettings = true },
+                    onHearSource = viewModel::setHearSource,
                 )
             }
             composable(ROUTE_LIVE) {
@@ -193,11 +256,13 @@ fun AppRoot(viewModel: AppViewModel) {
             liveLocked = live.inProgress,
             onDismiss = { showSettings = false },
             onSaveUrl = viewModel::setBaseUrl,
+            onSelectPipeline = viewModel::selectPipeline,
             onChunkMode = viewModel::setResponseMode,
             onVad = viewModel::setVad,
             onRefresh = viewModel::refreshConnection,
             onDisplayMode = viewModel::setDisplayMode,
             onTypeScale = viewModel::setTypeScale,
+            onHearSource = viewModel::setHearSource,
         )
     }
 

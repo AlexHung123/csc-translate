@@ -5,11 +5,16 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.csc.translate.data.DisplayMode
+import com.csc.translate.data.HearSource
+import com.csc.translate.data.Pipeline
 import com.csc.translate.data.TypeScale
 import com.csc.translate.data.UserSettings
 import com.csc.translate.data.db.SessionEntity
 import com.csc.translate.net.Health
 import com.csc.translate.net.ServiceConfig
+import com.csc.translate.pipeline.probeAsr
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.csc.translate.session.LiveUiState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -48,7 +53,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
-            settings.map { it.baseUrl }.distinctUntilChanged().collect {
+            settings.map { it.activeUrl() }.distinctUntilChanged().collect {
                 refreshConnection()
             }
         }
@@ -65,7 +70,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setBaseUrl(url: String) {
-        viewModelScope.launch { container.settings.setBaseUrl(url) }
+        viewModelScope.launch { container.settings.setActiveUrl(url) }
+    }
+
+    fun selectPipeline(pipeline: Pipeline, pendingUrl: String) {
+        viewModelScope.launch {
+            container.settings.setActiveUrl(pendingUrl)
+            container.settings.setPipeline(pipeline)
+        }
     }
 
     fun setResponseMode(mode: String) {
@@ -84,6 +96,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { container.settings.setTypeScale(scale) }
     }
 
+    fun setHearSource(source: HearSource) {
+        if (live.value.inProgress) return
+        viewModelScope.launch { container.settings.setHearSource(source) }
+    }
+
     fun deleteSessions(ids: List<String>) {
         if (ids.isEmpty()) return
         viewModelScope.launch { container.db.sessionDao().delete(ids) }
@@ -93,7 +110,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshConnection() {
         viewModelScope.launch {
-            val url = container.settings.current().baseUrl
+            val user = container.settings.current()
+            val url = user.activeUrl()
+            if (url.isBlank()) {
+                _health.value = null
+                _config.value = null
+                _healthError.value = null
+                return@launch
+            }
+            if (user.pipeline == Pipeline.Tomoru) {
+                val up = runCatching { withContext(Dispatchers.IO) { probeAsr(container.http, url) } }
+                if (up.isSuccess) {
+                    _health.value = Health(status = "ok")
+                    _healthError.value = null
+                } else {
+                    _health.value = null
+                    _healthError.value = url
+                }
+                _config.value = null
+                return@launch
+            }
             val healthResult = runCatching { container.api.health(url) }
             healthResult
                 .onSuccess {

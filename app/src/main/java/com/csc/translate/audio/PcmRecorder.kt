@@ -7,10 +7,15 @@ import android.media.MediaRecorder
 import android.util.Log
 import kotlin.math.max
 
+interface AudioCapture {
+    fun start()
+    fun stop()
+}
+
 class PcmRecorder(
     private val onFrame: (ByteArray) -> Unit,
     private val onError: (String) -> Unit,
-) {
+) : AudioCapture {
     @Volatile
     private var running = false
     private var record: AudioRecord? = null
@@ -21,7 +26,7 @@ class PcmRecorder(
         private set
 
     @SuppressLint("MissingPermission")
-    fun start(): Int {
+    override fun start() {
         stop()
         val chosen = pickSampleRate() ?: run {
             onError("Could not open the microphone")
@@ -51,10 +56,9 @@ class PcmRecorder(
         running = true
         rec.startRecording()
         thread = Thread({ loop(rec) }, "csc-pcm").also { it.start() }
-        return sampleRate
     }
 
-    fun stop() {
+    override fun stop() {
         running = false
         thread?.interrupt()
         thread = null

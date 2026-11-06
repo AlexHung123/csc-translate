@@ -2,10 +2,12 @@
 <resources>
     <string name="app_name">CSC Translate</string>
     <string name="tap_to_start">Tap below to start simultaneous translation</string>
+    <string name="tap_to_start_system">Tap below to translate audio this tablet is playing</string>
     <string name="start">Start</string>
     <string name="english">English</string>
     <string name="chinese">Chinese</string>
     <string name="listening_en">Listening</string>
+    <string name="listening_system">Listening to system</string>
     <string name="listening_zh">Listening</string>
     <string name="paused">Paused</string>
     <string name="connecting">Connecting…</string>
@@ -20,6 +22,10 @@
     <string name="delete_n">Delete (%1$d)</string>
     <string name="no_content">No speech detected</string>
     <string name="settings">Settings</string>
+    <string name="hear_source">Listen to</string>
+    <string name="hear_mic">Microphone</string>
+    <string name="hear_system">System</string>
+    <string name="system_audio_note">Hears one app, or everything this tablet plays. Allow the screen share prompt. Only the audio is used.</string>
     <string name="display_mode">Display</string>
     <string name="display_split">Split</string>
     <string name="display_translation">Target</string>
@@ -28,7 +34,15 @@
     <string name="font_small">Small</string>
     <string name="font_medium">Medium</string>
     <string name="font_large">Large</string>
+    <string name="pipeline">Pipeline</string>
+    <string name="pipeline_simul">SimulMT</string>
+    <string name="pipeline_tomoru">ASR + Translate</string>
     <string name="server_url">Server address</string>
+    <string name="asr_url">ASR server</string>
+    <string name="tomoru_url_hint">http://192.168.1.241:8000</string>
+    <string name="asr_pipeline_note">The phone recognizes Cantonese on this server, then translates.</string>
+    <string name="asr_ready">ASR server ready</string>
+    <string name="server_address_missing">Set the server address</string>
     <string name="test_connection">Test connection</string>
     <string name="chunk_mode">Chunking mode</string>
     <string name="chunk_standard">Standard (1600ms)</string>
@@ -42,8 +56,14 @@
     <string name="cancel">Cancel</string>
     <string name="end_session">End</string>
     <string name="need_mic">Microphone permission is required to start</string>
+    <string name="system_audio_denied">Screen share is required to hear system audio</string>
+    <string name="system_audio_fail">Could not capture system audio</string>
+    <string name="system_audio_stopped">System audio capture stopped</string>
+    <string name="system_audio_unavailable">System audio needs Android 10 or later</string>
     <string name="busy">Server is busy. All session slots are in use.</string>
     <string name="connect_fail">Could not connect to the translation service</string>
+    <string name="asr_fail">Recognition failed</string>
+    <string name="silero_fail">Could not start voice detection</string>
     <string name="socket_fail">Translation connection closed</string>
     <string name="mic_fail">Could not open the microphone</string>
     <string name="mic_gone">Microphone disconnected</string>
@@ -52,6 +72,7 @@
     <string name="app_exited">App closed</string>
     <string name="live_notification_title">CSC Translate</string>
     <string name="live_notification_text">Simultaneous translation in progress</string>
+    <string name="live_notification_system">Translating system audio</string>
     <string name="swap_direction">Switch translation direction</string>
     <string name="back">Back</string>
     <string name="history">History</string>

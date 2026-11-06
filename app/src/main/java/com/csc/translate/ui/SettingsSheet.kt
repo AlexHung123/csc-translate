@@ -27,6 +27,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import android.os.Build
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +48,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.csc.translate.R
 import com.csc.translate.data.DisplayMode
+import com.csc.translate.data.HearSource
+import com.csc.translate.data.Pipeline
 import com.csc.translate.data.TypeScale
 import com.csc.translate.data.UserSettings
 import com.csc.translate.net.Health
@@ -67,15 +70,19 @@ fun SettingsSheet(
     liveLocked: Boolean,
     onDismiss: () -> Unit,
     onSaveUrl: (String) -> Unit,
+    onSelectPipeline: (Pipeline, String) -> Unit,
     onChunkMode: (String) -> Unit,
     onVad: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onDisplayMode: (DisplayMode) -> Unit,
     onTypeScale: (TypeScale) -> Unit,
+    onHearSource: (HearSource) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var url by remember { mutableStateOf(settings.baseUrl) }
-    LaunchedEffect(settings.baseUrl) { url = settings.baseUrl }
+    var url by remember { mutableStateOf(settings.activeUrl()) }
+    LaunchedEffect(settings.pipeline, settings.baseUrl, settings.tomoruUrl) {
+        url = settings.activeUrl()
+    }
 
     ModalBottomSheet(
         onDismissRequest = {
@@ -136,14 +143,59 @@ fun SettingsSheet(
                 ),
             )
 
+            if (Build.VERSION.SDK_INT >= 29) {
+                Spacer(Modifier.height(22.dp))
+                SectionLabel(stringResource(R.string.hear_source))
+                ChoiceRow(
+                    options = listOf(
+                        Choice(stringResource(R.string.hear_mic), settings.hearSource == HearSource.Mic) {
+                            if (!liveLocked) onHearSource(HearSource.Mic)
+                        },
+                        Choice(stringResource(R.string.hear_system), settings.hearSource == HearSource.System) {
+                            if (!liveLocked) onHearSource(HearSource.System)
+                        },
+                    ),
+                )
+                if (settings.hearSource == HearSource.System) {
+                    Text(
+                        text = stringResource(R.string.system_audio_note),
+                        color = Mute,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            }
+
             Spacer(Modifier.height(22.dp))
-            SectionLabel(stringResource(R.string.server_url))
+            SectionLabel(stringResource(R.string.pipeline))
+            ChoiceRow(
+                options = listOf(
+                    Choice(stringResource(R.string.pipeline_simul), settings.pipeline == Pipeline.Simul) {
+                        if (!liveLocked) onSelectPipeline(Pipeline.Simul, url)
+                    },
+                    Choice(stringResource(R.string.pipeline_tomoru), settings.pipeline == Pipeline.Tomoru) {
+                        if (!liveLocked) onSelectPipeline(Pipeline.Tomoru, url)
+                    },
+                ),
+            )
+
+            Spacer(Modifier.height(22.dp))
+            SectionLabel(
+                stringResource(
+                    if (settings.pipeline == Pipeline.Tomoru) R.string.asr_url else R.string.server_url,
+                ),
+            )
             OutlinedTextField(
                 value = url,
                 onValueChange = { url = it },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
+                placeholder = {
+                    if (settings.pipeline == Pipeline.Tomoru) {
+                        Text(stringResource(R.string.tomoru_url_hint), color = Mute)
+                    }
+                },
                 singleLine = true,
                 enabled = !liveLocked,
             )
@@ -164,7 +216,9 @@ fun SettingsSheet(
                 Text(stringResource(R.string.test_connection), color = Color.White)
             }
             val statusText = when {
+                settings.activeUrl().isBlank() -> stringResource(R.string.server_address_missing)
                 healthError != null -> stringResource(R.string.connection_down, healthError)
+                settings.pipeline == Pipeline.Tomoru && health != null -> stringResource(R.string.asr_ready)
                 health != null -> stringResource(
                     R.string.connection_ok,
                     health.activeSessions,
@@ -178,39 +232,49 @@ fun SettingsSheet(
                 fontSize = 13.sp,
                 modifier = Modifier.padding(top = 10.dp),
             )
-
-            Spacer(Modifier.height(22.dp))
-            SectionLabel(stringResource(R.string.chunk_mode))
-            ModeRow(
-                selected = settings.responseMode == "standard",
-                label = stringResource(R.string.chunk_standard),
-                enabled = !liveLocked,
-                onClick = { onChunkMode("standard") },
-            )
-            ModeRow(
-                selected = settings.responseMode == "short_chunk",
-                label = stringResource(R.string.chunk_short),
-                enabled = !liveLocked,
-                onClick = { onChunkMode("short_chunk") },
-            )
-
-            Spacer(Modifier.height(8.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
+            if (settings.pipeline == Pipeline.Tomoru) {
                 Text(
-                    stringResource(R.string.vad),
-                    modifier = Modifier.weight(1f),
-                    color = Ink,
-                    fontSize = 16.sp,
+                    text = stringResource(R.string.asr_pipeline_note),
+                    color = Mute,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 6.dp),
                 )
-                Switch(
-                    checked = settings.vad,
-                    onCheckedChange = onVad,
-                    enabled = !liveLocked && (config?.vadAvailable ?: true),
-                    colors = SwitchDefaults.colors(checkedTrackColor = Ink),
+            }
+
+            if (settings.pipeline == Pipeline.Simul) {
+                Spacer(Modifier.height(22.dp))
+                SectionLabel(stringResource(R.string.chunk_mode))
+                ModeRow(
+                    selected = settings.responseMode == "standard",
+                    label = stringResource(R.string.chunk_standard),
+                    enabled = !liveLocked,
+                    onClick = { onChunkMode("standard") },
                 )
+                ModeRow(
+                    selected = settings.responseMode == "short_chunk",
+                    label = stringResource(R.string.chunk_short),
+                    enabled = !liveLocked,
+                    onClick = { onChunkMode("short_chunk") },
+                )
+
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        stringResource(R.string.vad),
+                        modifier = Modifier.weight(1f),
+                        color = Ink,
+                        fontSize = 16.sp,
+                    )
+                    Switch(
+                        checked = settings.vad,
+                        onCheckedChange = onVad,
+                        enabled = !liveLocked && (config?.vadAvailable ?: true),
+                        colors = SwitchDefaults.colors(checkedTrackColor = Ink),
+                    )
+                }
             }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -279,10 +343,11 @@ private fun ChoiceChip(
                 text = label,
                 modifier = Modifier.padding(horizontal = 4.dp),
                 textAlign = TextAlign.Center,
-                fontSize = 14.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = Ink,
-                maxLines = 1,
+                lineHeight = 16.sp,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
         }

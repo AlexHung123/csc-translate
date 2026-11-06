@@ -11,7 +11,10 @@ data class Transcript(
 
 fun Transcript.applyEvent(event: ServerEvent): Transcript = when (event.event) {
     "chunk", "flush" -> {
-        val nextTarget = targetRaw + (event.text ?: "")
+        val nextTarget = when {
+            event.fullText != null -> event.fullText
+            else -> targetRaw + (event.text ?: "")
+        }
         val nextSource = when {
             event.sourceTextFull != null -> event.sourceTextFull
             event.sourceText != null -> sourceRaw + event.sourceText

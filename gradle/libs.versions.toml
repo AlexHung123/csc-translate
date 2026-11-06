@@ -14,6 +14,7 @@ activityCompose = "1.9.3"
 coreKtx = "1.15.0"
 junit = "4.13.2"
 opencc4j = "1.8.1"
+onnxruntime = "1.24.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -36,6 +37,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 opencc4j = { group = "com.github.houbb", name = "opencc4j", version.ref = "opencc4j" }
+onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

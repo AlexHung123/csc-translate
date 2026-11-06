@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import com.csc.translate.R
 import com.csc.translate.data.DisplayMode
+import com.csc.translate.data.HearSource
 import com.csc.translate.data.TypeScale
 import com.csc.translate.data.UserSettings
 import com.csc.translate.session.LiveUiState
@@ -78,6 +79,7 @@ fun LiveScreen(
         finishing -> stringResource(R.string.finishing)
         live.paused -> stringResource(R.string.paused)
         live.fromFile -> stringResource(R.string.translating_file)
+        settings.hearSource == HearSource.System -> stringResource(R.string.listening_system)
         else -> stringResource(R.string.listening_en)
     }
     Column(
