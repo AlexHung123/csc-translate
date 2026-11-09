@@ -1,8 +1,12 @@
 package com.csc.translate
 
+import com.csc.translate.data.DEFAULT_RELAY_URL
 import com.csc.translate.data.HearSource
+import com.csc.translate.data.MeetingIds
+import com.csc.translate.data.Passcodes
 import com.csc.translate.data.Pipeline
 import com.csc.translate.data.UserSettings
+import java.util.Random
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -19,6 +23,34 @@ class SettingsTest {
             settings.copy(pipeline = Pipeline.Tomoru).activeUrl(),
         )
         assertEquals("", settings.copy(pipeline = Pipeline.Tomoru, tomoruUrl = "  ").activeUrl())
+    }
+
+    @Test
+    fun meetingIdIsGeneratedAndGrouped() {
+        val random = Random(7)
+        val first = MeetingIds.generate(random)
+        val second = MeetingIds.generate(Random(8))
+        assertEquals(8, first.length)
+        assertEquals(true, MeetingIds.isValid(first))
+        assertEquals(first.take(4) + "-" + first.drop(4), MeetingIds.format(first))
+        assertEquals(first, MeetingIds.canonical(MeetingIds.format(first)))
+        assertEquals(false, first == second)
+        assertEquals("", UserSettings().meetingId)
+    }
+
+    @Test
+    fun passcodeIsEmptyOrFourToTwelveLetters() {
+        assertEquals("", Passcodes.normalize("  "))
+        assertEquals("Ab12", Passcodes.normalize(" Ab12 "))
+        assertEquals(null, Passcodes.normalize("abc"))
+        assertEquals(null, Passcodes.normalize("has space"))
+        assertEquals("", UserSettings().passcode)
+    }
+
+    @Test
+    fun relayUrlDefaultsToThisComputer() {
+        assertEquals(DEFAULT_RELAY_URL, UserSettings().relayUrl)
+        assertEquals("http://192.168.1.58:8091", UserSettings().relayUrl)
     }
 
     @Test

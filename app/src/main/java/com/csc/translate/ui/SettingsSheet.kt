@@ -15,9 +15,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -37,7 +40,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -48,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.csc.translate.R
 import com.csc.translate.data.DisplayMode
+import com.csc.translate.data.MeetingIds
 import com.csc.translate.data.HearSource
 import com.csc.translate.data.Pipeline
 import com.csc.translate.data.TypeScale
@@ -77,16 +83,31 @@ fun SettingsSheet(
     onDisplayMode: (DisplayMode) -> Unit,
     onTypeScale: (TypeScale) -> Unit,
     onHearSource: (HearSource) -> Unit,
+    onSaveRelay: (String) -> Unit,
+    onSavePasscode: (String) -> Unit,
+    onResetMeeting: () -> Unit,
+    onCopied: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var url by remember { mutableStateOf(settings.activeUrl()) }
+    var relay by remember { mutableStateOf(settings.relayUrl) }
+    var passcode by remember { mutableStateOf(settings.passcode) }
+    var confirmReset by remember { mutableStateOf(false) }
     LaunchedEffect(settings.pipeline, settings.baseUrl, settings.tomoruUrl) {
         url = settings.activeUrl()
+    }
+    LaunchedEffect(settings.relayUrl) {
+        relay = settings.relayUrl
+    }
+    LaunchedEffect(settings.passcode) {
+        passcode = settings.passcode
     }
 
     ModalBottomSheet(
         onDismissRequest = {
             onSaveUrl(url)
+            onSaveRelay(relay)
+            onSavePasscode(passcode)
             onDismiss()
         },
         sheetState = sheetState,
@@ -241,6 +262,55 @@ fun SettingsSheet(
                 )
             }
 
+            Spacer(Modifier.height(22.dp))
+            SectionLabel(stringResource(R.string.relay_url))
+            OutlinedTextField(
+                value = relay,
+                onValueChange = { relay = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                placeholder = { Text(stringResource(R.string.relay_url_hint), color = Mute) },
+                singleLine = true,
+                enabled = !liveLocked,
+            )
+            Text(
+                text = stringResource(R.string.relay_note),
+                color = Mute,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+
+            MeetingIdBlock(
+                meetingId = settings.meetingId,
+                relayUrl = relay.trim().trimEnd('/'),
+                passcode = passcode,
+                onPasscode = { next ->
+                    if (next.length <= 12 && next.all { it.isLetterOrDigit() }) passcode = next
+                },
+                enabled = !liveLocked,
+                onReset = { confirmReset = true },
+                onCopied = onCopied,
+            )
+            if (confirmReset) {
+                AlertDialog(
+                    onDismissRequest = { confirmReset = false },
+                    title = { Text(stringResource(R.string.meeting_reset_title)) },
+                    text = { Text(stringResource(R.string.meeting_reset_body)) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            confirmReset = false
+                            onResetMeeting()
+                        }) { Text(stringResource(R.string.meeting_reset)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { confirmReset = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    },
+                )
+            }
+
             if (settings.pipeline == Pipeline.Simul) {
                 Spacer(Modifier.height(22.dp))
                 SectionLabel(stringResource(R.string.chunk_mode))
@@ -290,6 +360,84 @@ fun SettingsSheet(
             }
         }
     }
+}
+
+@Composable
+private fun MeetingIdBlock(
+    meetingId: String,
+    relayUrl: String,
+    passcode: String,
+    onPasscode: (String) -> Unit,
+    enabled: Boolean,
+    onReset: () -> Unit,
+    onCopied: () -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    val formatted = MeetingIds.format(meetingId)
+    val watchUrl = if (relayUrl.isNotBlank() && MeetingIds.isValid(meetingId)) {
+        "$relayUrl/watch/${MeetingIds.canonical(meetingId)}"
+    } else {
+        ""
+    }
+    Spacer(Modifier.height(22.dp))
+    SectionLabel(stringResource(R.string.meeting_id))
+    Text(
+        text = formatted.ifBlank { "…" },
+        color = Ink,
+        fontSize = 22.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    if (watchUrl.isNotBlank()) {
+        Text(
+            text = watchUrl,
+            color = Mute,
+            fontSize = 13.sp,
+            modifier = Modifier
+                .padding(top = 6.dp)
+                .clickable {
+                    clipboard.setText(AnnotatedString(watchUrl))
+                    onCopied()
+                },
+        )
+    }
+    Text(
+        text = stringResource(R.string.meeting_note),
+        color = Mute,
+        fontSize = 13.sp,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    Button(
+        onClick = onReset,
+        modifier = Modifier.padding(top = 12.dp),
+        enabled = enabled && meetingId.isNotBlank(),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Ink,
+            contentColor = Color.White,
+            disabledContainerColor = Ink.copy(alpha = 0.38f),
+            disabledContentColor = Color.White.copy(alpha = 0.7f),
+        ),
+    ) {
+        Text(stringResource(R.string.meeting_reset), color = Color.White)
+    }
+    Spacer(Modifier.height(22.dp))
+    SectionLabel(stringResource(R.string.passcode))
+    OutlinedTextField(
+        value = passcode,
+        onValueChange = onPasscode,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        placeholder = { Text(stringResource(R.string.passcode_hint), color = Mute) },
+        singleLine = true,
+        enabled = enabled,
+    )
+    Text(
+        text = stringResource(R.string.passcode_note),
+        color = Mute,
+        fontSize = 13.sp,
+        modifier = Modifier.padding(top = 8.dp),
+    )
 }
 
 @Composable

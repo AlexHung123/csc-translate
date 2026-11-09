@@ -58,6 +58,9 @@ data class UserSettings(
     val pipeline: Pipeline = Pipeline.Simul,
     val baseUrl: String = DEFAULT_BASE_URL,
     val tomoruUrl: String = "",
+    val relayUrl: String = DEFAULT_RELAY_URL,
+    val meetingId: String = "",
+    val passcode: String = "",
     val direction: String = "en-zh",
     val responseMode: String = "standard",
     val vad: Boolean = true,
@@ -74,6 +77,7 @@ data class UserSettings(
 }
 
 const val DEFAULT_BASE_URL = "http://192.168.1.241:8080"
+const val DEFAULT_RELAY_URL = "http://192.168.1.58:8091"
 
 class SettingsStore(context: Context) {
     private val dataStore = context.applicationContext.settingsDataStore
@@ -83,6 +87,9 @@ class SettingsStore(context: Context) {
             pipeline = Pipeline.from(prefs[KEY_PIPELINE]),
             baseUrl = prefs[KEY_URL] ?: DEFAULT_BASE_URL,
             tomoruUrl = prefs[KEY_TOMORU_URL] ?: "",
+            relayUrl = prefs[KEY_RELAY_URL] ?: DEFAULT_RELAY_URL,
+            meetingId = prefs[KEY_MEETING].orEmpty(),
+            passcode = prefs[KEY_PASSCODE].orEmpty(),
             direction = prefs[KEY_DIRECTION] ?: "en-zh",
             responseMode = prefs[KEY_MODE] ?: "standard",
             vad = prefs[KEY_VAD] ?: true,
@@ -106,6 +113,28 @@ class SettingsStore(context: Context) {
     suspend fun setTomoruUrl(url: String) {
         val cleaned = cleanUrl(url) ?: return
         dataStore.edit { it[KEY_TOMORU_URL] = cleaned }
+    }
+
+    suspend fun setRelayUrl(url: String) {
+        dataStore.edit { it[KEY_RELAY_URL] = url.trim().trimEnd('/') }
+    }
+
+    suspend fun ensureMeetingId(): String {
+        val existing = MeetingIds.canonical(current().meetingId)
+        if (existing != null) return existing
+        return storeMeetingId(MeetingIds.generate())
+    }
+
+    suspend fun resetMeetingId(): String = storeMeetingId(MeetingIds.generate())
+
+    suspend fun setPasscode(raw: String) {
+        val cleaned = Passcodes.normalize(raw) ?: return
+        dataStore.edit { it[KEY_PASSCODE] = cleaned }
+    }
+
+    private suspend fun storeMeetingId(id: String): String {
+        dataStore.edit { it[KEY_MEETING] = id }
+        return id
     }
 
     suspend fun setActiveUrl(url: String) {
@@ -156,6 +185,9 @@ class SettingsStore(context: Context) {
         val KEY_PIPELINE = stringPreferencesKey("pipeline")
         val KEY_URL = stringPreferencesKey("base_url")
         val KEY_TOMORU_URL = stringPreferencesKey("tomoru_url")
+        val KEY_RELAY_URL = stringPreferencesKey("relay_url")
+        val KEY_MEETING = stringPreferencesKey("meeting_id")
+        val KEY_PASSCODE = stringPreferencesKey("passcode")
         val KEY_DIRECTION = stringPreferencesKey("direction")
         val KEY_MODE = stringPreferencesKey("response_mode")
         val KEY_VAD = booleanPreferencesKey("vad")

@@ -22,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -35,6 +36,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.csc.translate.AppViewModel
+import kotlinx.coroutines.launch
 import com.csc.translate.R
 import com.csc.translate.audio.SystemAudio
 import com.csc.translate.data.HearSource
@@ -50,6 +52,7 @@ private const val ROUTE_DETAIL = "history/{id}"
 fun AppRoot(viewModel: AppViewModel) {
     val nav = rememberNavController()
     val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val live by viewModel.live.collectAsStateWithLifecycle()
@@ -222,6 +225,11 @@ fun AppRoot(viewModel: AppViewModel) {
                     onPause = viewModel::togglePause,
                     onStop = viewModel::stopSession,
                     onSettings = { showSettings = true },
+                    onCopied = {
+                        scope.launch {
+                            snackbar.showSnackbar(context.getString(R.string.watch_copied))
+                        }
+                    },
                 )
             }
             composable(ROUTE_HISTORY) {
@@ -263,6 +271,14 @@ fun AppRoot(viewModel: AppViewModel) {
             onDisplayMode = viewModel::setDisplayMode,
             onTypeScale = viewModel::setTypeScale,
             onHearSource = viewModel::setHearSource,
+            onSaveRelay = viewModel::setRelayUrl,
+            onSavePasscode = viewModel::setPasscode,
+            onResetMeeting = viewModel::resetMeetingId,
+            onCopied = {
+                scope.launch {
+                    snackbar.showSnackbar(context.getString(R.string.watch_copied))
+                }
+            },
         )
     }
 

@@ -39,9 +39,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -69,6 +72,7 @@ fun LiveScreen(
     onPause: () -> Unit,
     onStop: () -> Unit,
     onSettings: () -> Unit,
+    onCopied: () -> Unit,
 ) {
     val labels = directionLabels(live.direction)
     val connecting = live.phase == Phase.Connecting
@@ -95,6 +99,9 @@ fun LiveScreen(
             onSwap = {},
             onHistory = onHistory,
         )
+        if (live.watchUrl.isNotBlank()) {
+            WatchLink(url = live.watchUrl, onCopied = onCopied)
+        }
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -165,6 +172,36 @@ fun LiveScreen(
                 onSettings = onSettings,
             )
         }
+    }
+}
+
+@Composable
+private fun WatchLink(url: String, onCopied: () -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                clipboard.setText(AnnotatedString(url))
+                onCopied()
+            }
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.watch_link),
+            color = Mute,
+            fontSize = 13.sp,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = url,
+            modifier = Modifier.weight(1f),
+            color = Ink,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

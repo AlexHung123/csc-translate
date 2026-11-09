@@ -89,4 +89,18 @@
     <string name="file_too_large">Audio file is too large (100 MB limit)</string>
     <string name="file_read_fail">Could not read the audio file</string>
     <string name="file_submit_fail">Could not upload the audio file</string>
+    <string name="relay_url">Watch server</string>
+    <string name="relay_url_hint">http://192.168.1.58:8091</string>
+    <string name="relay_note">During a session, tap the watch link to copy it. People on this network open it in a browser.</string>
+    <string name="meeting_id">Meeting ID</string>
+    <string name="meeting_reset">Reset</string>
+    <string name="meeting_reset_title">Reset meeting ID?</string>
+    <string name="meeting_reset_body">The current watch link will stop updating. Share the new link after you reset.</string>
+    <string name="meeting_note">This tablet keeps this ID. Reset it when you want a new watch link.</string>
+    <string name="passcode">Passcode</string>
+    <string name="passcode_hint">4–12 letters or numbers</string>
+    <string name="passcode_note">Leave empty to let anyone with the link watch. The link does not include this code.</string>
+    <string name="relay_fail">Could not open the watch link</string>
+    <string name="watch_link">Watch</string>
+    <string name="watch_copied">Watch link copied</string>
 </resources>

@@ -52,6 +52,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val healthError: StateFlow<String?> = _healthError
 
     init {
+        viewModelScope.launch { container.settings.ensureMeetingId() }
         viewModelScope.launch {
             settings.map { it.activeUrl() }.distinctUntilChanged().collect {
                 refreshConnection()
@@ -71,6 +72,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setBaseUrl(url: String) {
         viewModelScope.launch { container.settings.setActiveUrl(url) }
+    }
+
+    fun setRelayUrl(url: String) {
+        viewModelScope.launch { container.settings.setRelayUrl(url) }
+    }
+
+    fun resetMeetingId() {
+        if (live.value.inProgress) return
+        viewModelScope.launch { container.settings.resetMeetingId() }
+    }
+
+    fun setPasscode(code: String) {
+        if (live.value.inProgress) return
+        viewModelScope.launch { container.settings.setPasscode(code) }
     }
 
     fun selectPipeline(pipeline: Pipeline, pendingUrl: String) {

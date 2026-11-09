@@ -15,6 +15,7 @@ import com.csc.translate.audio.SystemAudio
 import com.csc.translate.data.HearSource
 import com.csc.translate.data.Pipeline
 import com.csc.translate.data.SettingsStore
+import com.csc.translate.data.UserSettings
 import com.csc.translate.data.db.SessionDao
 import com.csc.translate.data.db.SessionEntity
 import com.csc.translate.net.Handshake
@@ -27,6 +28,8 @@ import com.csc.translate.pipeline.probeAsr
 import com.csc.translate.pipeline.readWav
 import com.csc.translate.pipeline.resample16
 import com.csc.translate.net.Health
+import com.csc.translate.net.RelayClient
+import com.csc.translate.net.RelayPicture
 import com.csc.translate.net.ServerEvent
 import com.csc.translate.net.SimulInferApi
 import com.csc.translate.net.TranslateSocket
@@ -52,6 +55,7 @@ import kotlinx.serialization.json.Json
 import kotlin.coroutines.coroutineContext
 import okhttp3.OkHttpClient
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -66,6 +70,7 @@ data class LiveUiState(
     val targetText: String = "",
     val startedAt: Long = 0L,
     val elapsedMs: Long = 0L,
+    val watchUrl: String = "",
 ) {
     val inProgress: Boolean get() = phase != Phase.Idle
 }
@@ -106,6 +111,23 @@ class LiveSessionController(
     private var fromFile = false
     private var uploadTaskId: String? = null
     private var tempUpload: File? = null
+    private val relayShare = RelayShare(RelayClient(http, json), scope)
+
+    init {
+        relayShare.onWatchUrl = { url ->
+            _state.update { current ->
+                if (!current.inProgress) current else current.copy(watchUrl = url)
+            }
+        }
+        relayShare.onOpenFailed = {
+            _messages.tryEmit(app.getString(R.string.relay_fail))
+        }
+        scope.launch {
+            settings.flow.collect {
+                if (_state.value.inProgress) noteRelay()
+            }
+        }
+    }
 
     val inProgress: Boolean get() = _state.value.inProgress
 
@@ -131,6 +153,7 @@ class LiveSessionController(
         paused.set(true)
         pausedAt = System.currentTimeMillis()
         _state.update { it.copy(paused = true) }
+        noteRelay()
     }
 
     fun resume() {
@@ -141,6 +164,7 @@ class LiveSessionController(
         pausedAt = null
         paused.set(false)
         _state.update { it.copy(paused = false, elapsedMs = nowElapsed()) }
+        noteRelay()
     }
 
     fun stop() {
@@ -167,6 +191,7 @@ class LiveSessionController(
         sessionId = UUID.randomUUID().toString()
         startedAt = System.currentTimeMillis()
         hearSystem = false
+        relayShare.begin()
     }
 
     private suspend fun startInternal() {
@@ -177,6 +202,7 @@ class LiveSessionController(
             direction = user.direction,
             startedAt = startedAt,
         )
+        noteRelay()
         if (user.hearSource == HearSource.System && !prepareSystem()) return
 
         val endpoint = user.activeUrl()
@@ -252,6 +278,7 @@ class LiveSessionController(
             direction = user.direction,
             startedAt = startedAt,
         )
+        noteRelay()
 
         val endpoint = user.activeUrl()
         if (endpoint.isBlank()) {
@@ -425,6 +452,7 @@ class LiveSessionController(
                         direction = event.direction ?: it.direction,
                     )
                 }
+                noteRelay()
             }
             "chunk", "flush" -> {
                 transcript = transcript.applyEvent(event)
@@ -465,6 +493,7 @@ class LiveSessionController(
         if (!hearSystem) MicCaptureService.start(app)
         asr = newAsrSession(direction, endpoint, voice)
         _state.update { it.copy(phase = Phase.Live) }
+        noteRelay()
         startCapture()
     }
 
@@ -507,6 +536,7 @@ class LiveSessionController(
         val session = newAsrSession(direction, endpoint, voice)
         asr = session
         _state.update { it.copy(phase = Phase.Live, fromFile = true) }
+        noteRelay()
         session.write(pcm)
         runCatching { session.finish() }
         if (!sessionOpen.get()) return
@@ -689,6 +719,7 @@ class LiveSessionController(
         finishing = true
         handshakeTimeout?.cancel()
         _state.update { it.copy(phase = Phase.Finishing, paused = false) }
+        noteRelay()
         paused.set(false)
         recorder?.stop()
         recorder = null
@@ -739,6 +770,7 @@ class LiveSessionController(
 
     private suspend fun teardown(save: Boolean) {
         withContext(NonCancellable) {
+            closeRelay()
             sessionOpen.set(false)
             handshakeTimeout?.cancel()
             timerJob?.cancel()
@@ -790,7 +822,55 @@ class LiveSessionController(
                 targetText = targetForDisplay(transcript.targetRaw),
             )
         }
+        noteRelay()
     }
+
+    private fun noteRelay() {
+        scope.launch {
+            val live = _state.value
+            if (!live.inProgress) return@launch
+            val user = settings.current()
+            val meetingId = settings.ensureMeetingId()
+            val base = user.relayUrl.trim().trimEnd('/')
+            if (base.isNotBlank()) {
+                val watch = "$base/watch/$meetingId"
+                _state.update { current ->
+                    if (!current.inProgress || current.watchUrl == watch) current
+                    else current.copy(watchUrl = watch)
+                }
+            }
+            val latest = _state.value
+            if (!latest.inProgress) return@launch
+            relayShare.sync(base, meetingId, user.passcode, relayPicture(latest, user, relayStatus(latest)))
+        }
+    }
+
+    private suspend fun closeRelay() {
+        val live = _state.value
+        val user = settings.current()
+        relayShare.finish(user.relayUrl, user.passcode, relayPicture(live, user, status = ""))
+    }
+
+    private fun relayStatus(live: LiveUiState): String = when {
+        live.phase == Phase.Connecting && live.fromFile -> app.getString(R.string.uploading_file)
+        live.phase == Phase.Connecting -> app.getString(R.string.connecting)
+        live.phase == Phase.Finishing -> app.getString(R.string.finishing)
+        live.paused -> app.getString(R.string.paused)
+        live.fromFile -> app.getString(R.string.translating_file)
+        hearSystem -> app.getString(R.string.listening_system)
+        else -> app.getString(R.string.listening_en)
+    }
+
+    private fun relayPicture(live: LiveUiState, user: UserSettings, status: String) = RelayPicture(
+        phase = live.phase.name.lowercase(Locale.ROOT),
+        direction = live.direction.ifBlank { user.direction },
+        displayMode = user.displayMode.key,
+        typeScale = user.typeScale.key,
+        sourceText = live.sourceText,
+        targetText = live.targetText,
+        paused = live.paused,
+        status = status,
+    )
 
     private fun nowElapsed(): Long {
         val end = pausedAt ?: System.currentTimeMillis()
