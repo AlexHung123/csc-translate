@@ -845,6 +845,28 @@ class LiveSessionController(
         }
     }
 
+    fun publishPasscode() {
+        scope.launch(Dispatchers.IO) {
+            if (_state.value.inProgress) return@launch
+            val user = settings.current()
+            val base = user.relayUrl.trim().trimEnd('/')
+            if (base.isBlank()) return@launch
+            val meetingId = settings.ensureMeetingId()
+            val picture = RelayPicture(
+                phase = "idle",
+                direction = user.direction.ifBlank { "en-zh" },
+                displayMode = user.displayMode.key,
+                typeScale = user.typeScale.key,
+                sourceText = "",
+                targetText = "",
+                paused = false,
+                status = "",
+            )
+            runCatching { RelayClient(http, json).open(base, meetingId, user.passcode, picture) }
+                .onFailure { Log.w("CscTranslate", "relay passcode", it) }
+        }
+    }
+
     private suspend fun closeRelay() {
         val live = _state.value
         val user = settings.current()
