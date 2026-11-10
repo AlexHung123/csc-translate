@@ -5,6 +5,7 @@ import com.csc.translate.data.HearSource
 import com.csc.translate.data.MeetingIds
 import com.csc.translate.data.Passcodes
 import com.csc.translate.data.Pipeline
+import com.csc.translate.data.SHOW_PIPELINE_CHOICE
 import com.csc.translate.data.UserSettings
 import java.util.Random
 import org.junit.Assert.assertEquals
@@ -14,6 +15,7 @@ class SettingsTest {
     @Test
     fun activeUrlFollowsTheSelectedPipeline() {
         val settings = UserSettings(
+            pipeline = Pipeline.Simul,
             baseUrl = "http://192.168.1.241:8080/",
             tomoruUrl = "http://192.168.1.241:8090/",
         )
@@ -23,6 +25,12 @@ class SettingsTest {
             settings.copy(pipeline = Pipeline.Tomoru).activeUrl(),
         )
         assertEquals("", settings.copy(pipeline = Pipeline.Tomoru, tomoruUrl = "  ").activeUrl())
+    }
+
+    @Test
+    fun pipelineChoiceIsHiddenAndDefaultsToAsr() {
+        assertEquals(false, SHOW_PIPELINE_CHOICE)
+        assertEquals(Pipeline.Tomoru, UserSettings().pipeline)
     }
 
     @Test
@@ -51,6 +59,11 @@ class SettingsTest {
     fun relayUrlDefaultsToThisComputer() {
         assertEquals(DEFAULT_RELAY_URL, UserSettings().relayUrl)
         assertEquals("http://192.168.1.58:8091", UserSettings().relayUrl)
+    }
+
+    @Test
+    fun shareRelayDefaultsOn() {
+        assertEquals(true, UserSettings().shareRelay)
     }
 
     @Test

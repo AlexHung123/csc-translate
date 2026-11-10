@@ -56,6 +56,7 @@ import com.csc.translate.data.DisplayMode
 import com.csc.translate.data.MeetingIds
 import com.csc.translate.data.HearSource
 import com.csc.translate.data.Pipeline
+import com.csc.translate.data.SHOW_PIPELINE_CHOICE
 import com.csc.translate.data.TypeScale
 import com.csc.translate.data.UserSettings
 import com.csc.translate.net.Health
@@ -84,6 +85,7 @@ fun SettingsSheet(
     onTypeScale: (TypeScale) -> Unit,
     onHearSource: (HearSource) -> Unit,
     onSaveRelay: (String) -> Unit,
+    onShareRelay: (Boolean) -> Unit,
     onSavePasscode: (String) -> Unit,
     onResetMeeting: () -> Unit,
     onCopied: () -> Unit,
@@ -187,18 +189,20 @@ fun SettingsSheet(
                 }
             }
 
-            Spacer(Modifier.height(22.dp))
-            SectionLabel(stringResource(R.string.pipeline))
-            ChoiceRow(
-                options = listOf(
-                    Choice(stringResource(R.string.pipeline_simul), settings.pipeline == Pipeline.Simul) {
-                        if (!liveLocked) onSelectPipeline(Pipeline.Simul, url)
-                    },
-                    Choice(stringResource(R.string.pipeline_tomoru), settings.pipeline == Pipeline.Tomoru) {
-                        if (!liveLocked) onSelectPipeline(Pipeline.Tomoru, url)
-                    },
-                ),
-            )
+            if (SHOW_PIPELINE_CHOICE) {
+                Spacer(Modifier.height(22.dp))
+                SectionLabel(stringResource(R.string.pipeline))
+                ChoiceRow(
+                    options = listOf(
+                        Choice(stringResource(R.string.pipeline_simul), settings.pipeline == Pipeline.Simul) {
+                            if (!liveLocked) onSelectPipeline(Pipeline.Simul, url)
+                        },
+                        Choice(stringResource(R.string.pipeline_tomoru), settings.pipeline == Pipeline.Tomoru) {
+                            if (!liveLocked) onSelectPipeline(Pipeline.Tomoru, url)
+                        },
+                    ),
+                )
+            }
 
             Spacer(Modifier.height(22.dp))
             SectionLabel(
@@ -263,35 +267,60 @@ fun SettingsSheet(
             }
 
             Spacer(Modifier.height(22.dp))
-            SectionLabel(stringResource(R.string.relay_url))
-            OutlinedTextField(
-                value = relay,
-                onValueChange = { relay = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                placeholder = { Text(stringResource(R.string.relay_url_hint), color = Mute) },
-                singleLine = true,
-                enabled = !liveLocked,
-            )
-            Text(
-                text = stringResource(R.string.relay_note),
-                color = Mute,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-
-            MeetingIdBlock(
-                meetingId = settings.meetingId,
-                relayUrl = relay.trim().trimEnd('/'),
-                passcode = passcode,
-                onPasscode = { next ->
-                    if (next.length <= 12 && next.all { it.isLetterOrDigit() }) passcode = next
-                },
-                enabled = !liveLocked,
-                onReset = { confirmReset = true },
-                onCopied = onCopied,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    stringResource(R.string.relay_share),
+                    modifier = Modifier.weight(1f),
+                    color = Ink,
+                    fontSize = 16.sp,
+                )
+                Switch(
+                    checked = settings.shareRelay,
+                    onCheckedChange = onShareRelay,
+                    colors = SwitchDefaults.colors(checkedTrackColor = Ink),
+                )
+            }
+            if (settings.shareRelay) {
+                Spacer(Modifier.height(22.dp))
+                SectionLabel(stringResource(R.string.relay_url))
+                OutlinedTextField(
+                    value = relay,
+                    onValueChange = { relay = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    placeholder = { Text(stringResource(R.string.relay_url_hint), color = Mute) },
+                    singleLine = true,
+                    enabled = !liveLocked,
+                )
+                Text(
+                    text = stringResource(R.string.relay_note),
+                    color = Mute,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+                MeetingIdBlock(
+                    meetingId = settings.meetingId,
+                    relayUrl = relay.trim().trimEnd('/'),
+                    passcode = passcode,
+                    onPasscode = { next ->
+                        if (next.length <= 12 && next.all { it.isLetterOrDigit() }) passcode = next
+                    },
+                    enabled = !liveLocked,
+                    onReset = { confirmReset = true },
+                    onCopied = onCopied,
+                )
+            } else {
+                Text(
+                    text = stringResource(R.string.relay_share_off),
+                    color = Mute,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
             if (confirmReset) {
                 AlertDialog(
                     onDismissRequest = { confirmReset = false },
@@ -345,18 +374,6 @@ fun SettingsSheet(
                         colors = SwitchDefaults.colors(checkedTrackColor = Ink),
                     )
                 }
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.tts), color = Ink, fontSize = 16.sp)
-                    Text(stringResource(R.string.tts_unavailable), color = Mute, fontSize = 12.sp)
-                }
-                Switch(checked = false, onCheckedChange = {}, enabled = false)
             }
         }
     }

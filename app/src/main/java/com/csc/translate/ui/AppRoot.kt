@@ -272,6 +272,7 @@ fun AppRoot(viewModel: AppViewModel) {
             onTypeScale = viewModel::setTypeScale,
             onHearSource = viewModel::setHearSource,
             onSaveRelay = viewModel::setRelayUrl,
+            onShareRelay = viewModel::setShareRelay,
             onSavePasscode = viewModel::setPasscode,
             onResetMeeting = viewModel::resetMeetingId,
             onCopied = {

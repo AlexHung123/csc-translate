@@ -84,6 +84,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setShareRelay(enabled: Boolean) {
+        viewModelScope.launch {
+            container.settings.setShareRelay(enabled)
+            if (enabled) container.sessions.publishPasscode()
+        }
+    }
+
     fun resetMeetingId() {
         if (live.value.inProgress) return
         viewModelScope.launch {

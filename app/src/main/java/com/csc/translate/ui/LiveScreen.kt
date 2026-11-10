@@ -22,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.automirrored.outlined.VolumeOff
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -359,12 +358,6 @@ private fun SessionPill(
                         .clickable(enabled = !finishing, role = Role.Button, onClick = onPause),
                 )
             }
-            Icon(
-                imageVector = Icons.AutoMirrored.Outlined.VolumeOff,
-                contentDescription = stringResource(R.string.speaker_muted),
-                tint = Mute,
-                modifier = Modifier.size(22.dp),
-            )
             Icon(
                 imageVector = Icons.Outlined.Tune,
                 contentDescription = stringResource(R.string.settings),

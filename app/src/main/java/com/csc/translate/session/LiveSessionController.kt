@@ -112,11 +112,13 @@ class LiveSessionController(
     private var uploadTaskId: String? = null
     private var tempUpload: File? = null
     private val relayShare = RelayShare(RelayClient(http, json), scope)
+    private val shareRelay = AtomicBoolean(true)
+    private var relayNote = 0
 
     init {
         relayShare.onWatchUrl = { url ->
             _state.update { current ->
-                if (!current.inProgress) current else current.copy(watchUrl = url)
+                if (!current.inProgress || !shareRelay.get()) current else current.copy(watchUrl = url)
             }
         }
         relayShare.onOpenFailed = {
@@ -826,11 +828,23 @@ class LiveSessionController(
     }
 
     private fun noteRelay() {
+        val note = ++relayNote
         scope.launch {
+            val user = settings.current()
+            if (note != relayNote) return@launch
             val live = _state.value
             if (!live.inProgress) return@launch
-            val user = settings.current()
+            shareRelay.set(user.shareRelay)
+            if (!user.shareRelay) {
+                relayShare.halt()
+                _state.update { current ->
+                    if (!current.inProgress || current.watchUrl.isEmpty()) current
+                    else current.copy(watchUrl = "")
+                }
+                return@launch
+            }
             val meetingId = settings.ensureMeetingId()
+            if (note != relayNote || !_state.value.inProgress) return@launch
             val base = user.relayUrl.trim().trimEnd('/')
             if (base.isNotBlank()) {
                 val watch = "$base/watch/$meetingId"
@@ -840,7 +854,8 @@ class LiveSessionController(
                 }
             }
             val latest = _state.value
-            if (!latest.inProgress) return@launch
+            if (!latest.inProgress || note != relayNote) return@launch
+            relayShare.resume()
             relayShare.sync(base, meetingId, user.passcode, relayPicture(latest, user, relayStatus(latest)))
         }
     }
@@ -849,6 +864,7 @@ class LiveSessionController(
         scope.launch(Dispatchers.IO) {
             if (_state.value.inProgress) return@launch
             val user = settings.current()
+            if (!user.shareRelay) return@launch
             val base = user.relayUrl.trim().trimEnd('/')
             if (base.isBlank()) return@launch
             val meetingId = settings.ensureMeetingId()

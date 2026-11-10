@@ -52,6 +52,24 @@ class RelayShare(
         onWatchUrl("")
     }
 
+    /** Stop opening and updating. A later [sync] does nothing until [resume]. */
+    fun halt() {
+        synchronized(gate) {
+            accepting = false
+            latest.set(null)
+        }
+    }
+
+    /** Allow pushes again after [halt]. */
+    fun resume() {
+        synchronized(gate) {
+            if (accepting) return
+            accepting = true
+            warned = false
+            retryAt = 0L
+        }
+    }
+
     fun sync(baseUrl: String, meetingId: String, passcode: String, picture: RelayPicture) {
         val url = baseUrl.trim().trimEnd('/')
         val id = meetingId.trim()

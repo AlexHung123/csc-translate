@@ -48,8 +48,6 @@
     <string name="chunk_standard">Standard (1600ms)</string>
     <string name="chunk_short">Short chunk (800ms after first)</string>
     <string name="vad">Voice activity detection</string>
-    <string name="tts">Read translation aloud</string>
-    <string name="tts_unavailable">Spoken translation is not enabled on the server</string>
     <string name="service_status">Service status</string>
     <string name="stop_confirm_title">End session?</string>
     <string name="stop_confirm_body">The session will be saved to history.</string>
@@ -76,7 +74,6 @@
     <string name="swap_direction">Switch translation direction</string>
     <string name="back">Back</string>
     <string name="history">History</string>
-    <string name="speaker_muted">Spoken translation is off</string>
     <string name="pause">Pause</string>
     <string name="resume">Resume</string>
     <string name="stop">Stop</string>
@@ -89,6 +86,8 @@
     <string name="file_too_large">Audio file is too large (100 MB limit)</string>
     <string name="file_read_fail">Could not read the audio file</string>
     <string name="file_submit_fail">Could not upload the audio file</string>
+    <string name="relay_share">Send to watch server</string>
+    <string name="relay_share_off">Off. Translation stays on this tablet.</string>
     <string name="relay_url">Watch server</string>
     <string name="relay_url_hint">http://192.168.1.58:8091</string>
     <string name="relay_note">During a session, tap the watch link to copy it. People on this network open it in a browser.</string>

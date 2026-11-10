@@ -22,6 +22,9 @@ enum class Pipeline(val key: String) {
     }
 }
 
+/** Settings hides the pipeline picker. Sessions use ASR + Translate until this is true again. */
+const val SHOW_PIPELINE_CHOICE = false
+
 enum class HearSource(val key: String) {
     Mic("mic"),
     System("system"),
@@ -55,10 +58,11 @@ enum class TypeScale(val key: String, val sp: Int, val lineHeight: Int) {
 }
 
 data class UserSettings(
-    val pipeline: Pipeline = Pipeline.Simul,
+    val pipeline: Pipeline = Pipeline.Tomoru,
     val baseUrl: String = DEFAULT_BASE_URL,
     val tomoruUrl: String = "",
     val relayUrl: String = DEFAULT_RELAY_URL,
+    val shareRelay: Boolean = true,
     val meetingId: String = "",
     val passcode: String = "",
     val direction: String = "en-zh",
@@ -84,10 +88,11 @@ class SettingsStore(context: Context) {
 
     val flow: Flow<UserSettings> = dataStore.data.map { prefs ->
         UserSettings(
-            pipeline = Pipeline.from(prefs[KEY_PIPELINE]),
+            pipeline = if (SHOW_PIPELINE_CHOICE) Pipeline.from(prefs[KEY_PIPELINE]) else Pipeline.Tomoru,
             baseUrl = prefs[KEY_URL] ?: DEFAULT_BASE_URL,
             tomoruUrl = prefs[KEY_TOMORU_URL] ?: "",
             relayUrl = prefs[KEY_RELAY_URL] ?: DEFAULT_RELAY_URL,
+            shareRelay = prefs[KEY_SHARE_RELAY] ?: true,
             meetingId = prefs[KEY_MEETING].orEmpty(),
             passcode = prefs[KEY_PASSCODE].orEmpty(),
             direction = prefs[KEY_DIRECTION] ?: "en-zh",
@@ -117,6 +122,10 @@ class SettingsStore(context: Context) {
 
     suspend fun setRelayUrl(url: String) {
         dataStore.edit { it[KEY_RELAY_URL] = url.trim().trimEnd('/') }
+    }
+
+    suspend fun setShareRelay(enabled: Boolean) {
+        dataStore.edit { it[KEY_SHARE_RELAY] = enabled }
     }
 
     suspend fun ensureMeetingId(): String {
@@ -186,6 +195,7 @@ class SettingsStore(context: Context) {
         val KEY_URL = stringPreferencesKey("base_url")
         val KEY_TOMORU_URL = stringPreferencesKey("tomoru_url")
         val KEY_RELAY_URL = stringPreferencesKey("relay_url")
+        val KEY_SHARE_RELAY = booleanPreferencesKey("share_relay")
         val KEY_MEETING = stringPreferencesKey("meeting_id")
         val KEY_PASSCODE = stringPreferencesKey("passcode")
         val KEY_DIRECTION = stringPreferencesKey("direction")
