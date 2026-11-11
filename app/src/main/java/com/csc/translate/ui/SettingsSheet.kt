@@ -84,6 +84,7 @@ fun SettingsSheet(
     onDisplayMode: (DisplayMode) -> Unit,
     onTypeScale: (TypeScale) -> Unit,
     onHearSource: (HearSource) -> Unit,
+    onSaveIndex: (String) -> Unit,
     onSaveRelay: (String) -> Unit,
     onShareRelay: (Boolean) -> Unit,
     onSavePasscode: (String) -> Unit,
@@ -92,11 +93,15 @@ fun SettingsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var url by remember { mutableStateOf(settings.activeUrl()) }
+    var indexUrl by remember { mutableStateOf(settings.indexUrl) }
     var relay by remember { mutableStateOf(settings.relayUrl) }
     var passcode by remember { mutableStateOf(settings.passcode) }
     var confirmReset by remember { mutableStateOf(false) }
     LaunchedEffect(settings.pipeline, settings.baseUrl, settings.tomoruUrl) {
         url = settings.activeUrl()
+    }
+    LaunchedEffect(settings.indexUrl) {
+        indexUrl = settings.indexUrl
     }
     LaunchedEffect(settings.relayUrl) {
         relay = settings.relayUrl
@@ -108,6 +113,7 @@ fun SettingsSheet(
     ModalBottomSheet(
         onDismissRequest = {
             onSaveUrl(url)
+            onSaveIndex(indexUrl)
             onSaveRelay(relay)
             onSavePasscode(passcode)
             onDismiss()
@@ -263,6 +269,24 @@ fun SettingsSheet(
                     color = Mute,
                     fontSize = 13.sp,
                     modifier = Modifier.padding(top = 6.dp),
+                )
+                Spacer(Modifier.height(22.dp))
+                SectionLabel(stringResource(R.string.index_url))
+                OutlinedTextField(
+                    value = indexUrl,
+                    onValueChange = { indexUrl = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    placeholder = { Text(stringResource(R.string.index_url_hint), color = Mute) },
+                    singleLine = true,
+                    enabled = !liveLocked,
+                )
+                Text(
+                    text = stringResource(R.string.index_url_note),
+                    color = Mute,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
             }
 

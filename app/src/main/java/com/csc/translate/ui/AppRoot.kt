@@ -271,6 +271,7 @@ fun AppRoot(viewModel: AppViewModel) {
             onDisplayMode = viewModel::setDisplayMode,
             onTypeScale = viewModel::setTypeScale,
             onHearSource = viewModel::setHearSource,
+            onSaveIndex = viewModel::setIndexUrl,
             onSaveRelay = viewModel::setRelayUrl,
             onShareRelay = viewModel::setShareRelay,
             onSavePasscode = viewModel::setPasscode,

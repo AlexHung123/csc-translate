@@ -19,9 +19,6 @@ import java.util.concurrent.TimeUnit
 private val json = Json { ignoreUnknownKeys = true }
 private val jsonType = "application/json".toMediaType()
 
-private const val TRANSLATE_URL = "https://index-translate.bilibili.com"
-private const val TRANSLATE_MODEL = "Index-Translate-35B-A3B"
-
 /** This vLLM keeps a system message and drops the assistant prefill llama-server uses. */
 private const val CANTONESE = "language Cantonese"
 
@@ -75,10 +72,12 @@ class IndexTranslator(
     private val client: OkHttpClient,
     private val src: String,
     private val tgt: String,
+    private val baseUrl: String,
+    private val model: String,
 ) {
     fun translate(text: String, draft: Boolean): String {
         val body = buildJsonObject {
-            put("model", TRANSLATE_MODEL)
+            put("model", model)
             put(
                 "messages",
                 buildJsonArray {
@@ -95,7 +94,7 @@ class IndexTranslator(
             put("chat_template_kwargs", buildJsonObject { put("enable_thinking", false) })
         }
         val request = Request.Builder()
-            .url(restUrl(TRANSLATE_URL, "v1/chat/completions"))
+            .url(restUrl(baseUrl, "v1/chat/completions"))
             .header("User-Agent", "Index-Translate-Client/1.0")
             .post(body.toString().toRequestBody(jsonType))
             .build()

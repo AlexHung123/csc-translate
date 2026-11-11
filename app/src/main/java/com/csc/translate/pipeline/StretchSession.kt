@@ -20,11 +20,15 @@ private const val PREROLL = (0.4 * RATE).toInt()
 private const val VOLATILE = (0.5 * RATE).toInt()
 private const val GAP = RATE
 private const val LONGEST = 15 * RATE
+private const val TAIL_WAIT = (0.6 * RATE).toInt()
 private const val DRAFT_GAP_MS = 600L
 
 /**
  * The phone's ASR + translate path. It hears 16 kHz PCM, cuts speech the way Tomoru's Qwen3-ASR
- * stretch runner does, asks [decode] for the text, and [translate] for each line.
+ * stretch runner does, asks [decode] for the text, and [translate] for each line. A partial
+ * shows a new word as soon as a decode adds it. A different reading waits until the next
+ * decode agrees. A sentence stays once shown. The unfinished tail of a final waits 0.6 s,
+ * and joins the next stretch if the speaker goes on.
  */
 internal class StretchSession(
     parent: CoroutineScope,
@@ -59,9 +63,8 @@ internal class StretchSession(
     private var generation = 0
     private var pendingDecode: Pending? = null
 
+    private val hypothesis = Hypothesis()
     private val lines = mutableListOf<Line>()
-    private var closed = 0
-    private var openLines = 0
     private var pending = ""
     private var draft = ""
     private var draftBusy = false
@@ -98,6 +101,13 @@ internal class StretchSession(
 
     fun snapshot(): Pair<String, String> = synchronized(lock) { source() to target() }
 
+    /** For tests: returns once audio queued before the call has been decoded. */
+    suspend fun awaitIdle() {
+        val done = CompletableDeferred<Unit>()
+        incoming.send(Incoming.Sync(done))
+        done.await()
+    }
+
     private suspend fun run() {
         while (true) {
             val first = incoming.receive()
@@ -107,21 +117,31 @@ internal class StretchSession(
                 batch += next
             }
             var stop = false
+            var sync: CompletableDeferred<Unit>? = null
             for (item in batch) {
                 when (item) {
                     is Incoming.Audio -> feed(item.pcm)
                     Incoming.Finish -> stop = true
+                    is Incoming.Sync -> sync = item.done
                 }
             }
             val req = takePending()
             if (req != null) apply(req, decodeLogged(req))
+            val tail = takeQuiet()
+            if (tail.isNotEmpty()) publish(tail)
             if (stop) {
-                val last = takePending() ?: finalNow()
+                val partial = takePending()
+                if (partial != null) apply(partial, decodeLogged(partial))
+                val last = finalNow()
                 if (last != null) apply(last, decodeLogged(last))
+                val flushed = lockTail()
+                if (flushed.isNotEmpty()) publish(flushed)
+                sync?.complete(Unit)
                 val deadline = System.nanoTime() + 30_000_000_000L
                 while (inflight.get() > 0 && System.nanoTime() < deadline) delay(10)
                 return
             }
+            sync?.complete(Unit)
         }
     }
 
@@ -177,6 +197,7 @@ internal class StretchSession(
                 start = max(base, onAt - PREROLL)
                 decodedAt = stepped
                 generation++
+                hypothesis.resetStretch()
                 trace("stretch open")
             }
             speaking && open && stepped - start >= LONGEST * 2 -> {
@@ -187,6 +208,7 @@ internal class StretchSession(
                 ended = false
                 open = true
                 generation++
+                hypothesis.resetStretch()
             }
             speaking && open && stepped - decodedAt >= VOLATILE -> {
                 decodedAt = stepped
@@ -217,7 +239,7 @@ internal class StretchSession(
             if (final) open = false
             return
         }
-        val req = Pending(audio, final, generation)
+        val req = Pending(audio, final, generation, hypothesis.alignPrefix)
         val current = pendingDecode
         if (current == null || final || !current.final) pendingDecode = req
         if (final) open = false
@@ -231,9 +253,21 @@ internal class StretchSession(
 
     private fun finalNow(): Pending? {
         if (!open) return null
-        val req = Pending(slice(start, total), final = true, generation)
+        val req = Pending(slice(start, total), final = true, generation, hypothesis.alignPrefix)
         open = false
         return if (req.pcm.isEmpty()) null else req
+    }
+
+    private fun takeQuiet(): List<String> {
+        if (open || voiceOn || !heardVoice || stepped < offAt + TAIL_WAIT) return emptyList()
+        if (!hypothesis.hasTail()) return emptyList()
+        return lockTail()
+    }
+
+    private fun lockTail(): List<String> {
+        val locked = hypothesis.commitHeld()
+        if (locked.isNotEmpty()) trace("tail ${locked.joinToString("|").take(80)}")
+        return locked
     }
 
     private fun apply(req: Pending, text: String) {
@@ -241,53 +275,42 @@ internal class StretchSession(
             trace("drop partial")
             return
         }
-        val (sentences, tail) = if (req.final) {
-            val (done, rest) = splitHypothesis(text)
-            val all = done.toMutableList()
-            if (rest.any { it.isLetterOrDigit() }) all += rest.trim()
-            all to ""
+        val newly = if (req.final) {
+            val quiet = heardVoice && !voiceOn && stepped >= offAt + TAIL_WAIT
+            hypothesis.absorb(text, req.alignPrefix, final = true, quiet = quiet)
         } else {
-            splitHypothesis(text)
+            val agreed = hypothesis.settle(text)
+            if (splitHypothesis(agreed).first.isNotEmpty()) ended = true
+            hypothesis.absorb(agreed, hypothesis.alignPrefix, final = false, quiet = false)
         }
+        if (newly.isNotEmpty()) trace("lock ${newly.joinToString("|").take(80)}")
+        publish(newly)
+    }
+
+    private fun publish(newly: List<String>) {
         val jobs = mutableListOf<Work>()
-        var view: Pair<String, String>? = null
+        val view: Pair<String, String>
         synchronized(lock) {
-            if (!req.final && req.generation != generation) return
-            ended = !req.final && sentences.isNotEmpty()
-            val from = closed
-            val previous = lines.drop(from).map { it.src to it.tgt }
-            while (lines.size > from) lines.removeAt(lines.lastIndex)
-            if (sentences.map { it } != previous.map { it.first } || req.final) draftGen++
-            openLines = 0
-            sentences.forEachIndexed { index, sentence ->
-                val old = previous.getOrNull(index)
-                val kept = old?.first == sentence
-                lines += Line(sentence, if (kept) old.second else "")
-                openLines++
-                if (!kept && sentence.isNotBlank()) {
-                    jobs += Work(lines.lastIndex, sentence, draft = false, gen = draftGen)
-                }
+            if (newly.isNotEmpty()) draftGen++
+            val gen = draftGen
+            for (sentence in newly) {
+                lines += Line(sentence, "")
+                jobs += Work(lines.lastIndex, sentence, draft = false, gen = gen)
             }
-            if (req.final) {
-                closed = lines.size
-                openLines = 0
-                pending = ""
+            pending = hypothesis.pending
+            if (hypothesis.pending.isEmpty() && newly.isNotEmpty()) {
                 draft = ""
                 draftLen = 0
-                draftBusy = false
-            } else {
-                pending = tail
-                maybeDraft()?.let { jobs += it }
             }
+            maybeDraft()?.let { jobs += it }
             view = source() to target()
         }
-        view?.let { (src, tgt) ->
-            if (shown.isNotEmpty() && src.length + 12 < shown.length) {
-                trace("source shrank ${shown.length} -> ${src.length} ${src.takeLast(80)}")
-            }
-            shown = src
-            onView(src, tgt)
+        val (src, tgt) = view
+        if (shown.isNotEmpty() && src.length + 12 < shown.length) {
+            trace("source shrank ${shown.length} -> ${src.length} ${src.takeLast(80)}")
         }
+        shown = src
+        onView(src, tgt)
         jobs.forEach { send(it) }
     }
 
@@ -386,13 +409,19 @@ internal class StretchSession(
 
 private data class Line(val src: String, var tgt: String)
 
-private data class Pending(val pcm: ByteArray, val final: Boolean, val generation: Int)
+private data class Pending(
+    val pcm: ByteArray,
+    val final: Boolean,
+    val generation: Int,
+    val alignPrefix: String,
+)
 
 private data class Work(val index: Int, val text: String, val draft: Boolean, val gen: Int)
 
 private sealed interface Incoming {
     data class Audio(val pcm: ByteArray) : Incoming
     data object Finish : Incoming
+    class Sync(val done: CompletableDeferred<Unit>) : Incoming
 }
 
 private fun draftStep(code: String): Int = when {

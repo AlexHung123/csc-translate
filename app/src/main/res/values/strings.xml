@@ -41,6 +41,9 @@
     <string name="asr_url">ASR server</string>
     <string name="tomoru_url_hint">http://192.168.1.241:8000</string>
     <string name="asr_pipeline_note">The phone recognizes Cantonese on this server, then translates.</string>
+    <string name="index_url">Index Translate</string>
+    <string name="index_url_hint">https://index-translate.bilibili.com</string>
+    <string name="index_url_note">Leave empty to use https://index-translate.bilibili.com. A local address uses IndexTeam/Index-Translate-35B-A3B-preview-FP4.</string>
     <string name="asr_ready">ASR server ready</string>
     <string name="server_address_missing">Set the server address</string>
     <string name="test_connection">Test connection</string>

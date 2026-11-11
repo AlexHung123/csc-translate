@@ -1,6 +1,10 @@
 package com.csc.translate
 
+import com.csc.translate.data.CLOUD_INDEX_MODEL
+import com.csc.translate.data.DEFAULT_INDEX_URL
 import com.csc.translate.data.DEFAULT_RELAY_URL
+import com.csc.translate.data.LOCAL_INDEX_MODEL
+import com.csc.translate.data.LOCAL_INDEX_URL
 import com.csc.translate.data.HearSource
 import com.csc.translate.data.MeetingIds
 import com.csc.translate.data.Passcodes
@@ -64,6 +68,21 @@ class SettingsTest {
     @Test
     fun shareRelayDefaultsOn() {
         assertEquals(true, UserSettings().shareRelay)
+    }
+
+    @Test
+    fun blankIndexUrlUsesTheBilibiliServer() {
+        val cloud = UserSettings(indexUrl = "  ").indexTarget()
+        assertEquals(DEFAULT_INDEX_URL, cloud.url)
+        assertEquals(CLOUD_INDEX_MODEL, cloud.model)
+        assertEquals("https://index-translate.bilibili.com", cloud.url)
+        assertEquals("Index-Translate-35B-A3B", cloud.model)
+
+        val local = UserSettings().indexTarget()
+        assertEquals(LOCAL_INDEX_URL, UserSettings().indexUrl)
+        assertEquals("http://192.168.1.241:8080", local.url)
+        assertEquals(LOCAL_INDEX_MODEL, local.model)
+        assertEquals("IndexTeam/Index-Translate-35B-A3B-preview-FP4", local.model)
     }
 
     @Test

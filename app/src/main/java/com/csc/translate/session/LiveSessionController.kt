@@ -13,6 +13,7 @@ import com.csc.translate.audio.PcmRecorder
 import com.csc.translate.audio.PlaybackRecorder
 import com.csc.translate.audio.SystemAudio
 import com.csc.translate.data.HearSource
+import com.csc.translate.data.IndexTarget
 import com.csc.translate.data.Pipeline
 import com.csc.translate.data.SettingsStore
 import com.csc.translate.data.UserSettings
@@ -214,7 +215,7 @@ class LiveSessionController(
         }
         sessionUrl = endpoint
         if (user.pipeline == Pipeline.Tomoru) {
-            startAsr(user.direction, endpoint)
+            startAsr(user.direction, endpoint, user.indexTarget())
             return
         }
         val health: Health = runCatching { api.health(endpoint) }.getOrElse {
@@ -289,7 +290,7 @@ class LiveSessionController(
         }
         sessionUrl = endpoint
         if (user.pipeline == Pipeline.Tomoru) {
-            startAsrFile(uri, user.direction, endpoint, myId)
+            startAsrFile(uri, user.direction, endpoint, user.indexTarget(), myId)
             return
         }
         val health: Health = runCatching { api.health(endpoint) }.getOrElse {
@@ -476,7 +477,7 @@ class LiveSessionController(
         }
     }
 
-    private suspend fun startAsr(direction: String, endpoint: String) {
+    private suspend fun startAsr(direction: String, endpoint: String, index: IndexTarget) {
         val up = runCatching { withContext(Dispatchers.IO) { probeAsr(http, endpoint) } }
         if (sessionId.isBlank()) return
         if (up.isFailure) {
@@ -493,13 +494,19 @@ class LiveSessionController(
         ready = true
         sessionOpen.set(true)
         if (!hearSystem) MicCaptureService.start(app)
-        asr = newAsrSession(direction, endpoint, voice)
+        asr = newAsrSession(direction, endpoint, index, voice)
         _state.update { it.copy(phase = Phase.Live) }
         noteRelay()
         startCapture()
     }
 
-    private suspend fun startAsrFile(uri: Uri, direction: String, endpoint: String, myId: String) {
+    private suspend fun startAsrFile(
+        uri: Uri,
+        direction: String,
+        endpoint: String,
+        index: IndexTarget,
+        myId: String,
+    ) {
         val up = runCatching { withContext(Dispatchers.IO) { probeAsr(http, endpoint) } }
         if (sessionId != myId) return
         if (up.isFailure) {
@@ -535,7 +542,7 @@ class LiveSessionController(
         sessionOpen.set(true)
         ready = true
         startTimer()
-        val session = newAsrSession(direction, endpoint, voice)
+        val session = newAsrSession(direction, endpoint, index, voice)
         asr = session
         _state.update { it.copy(phase = Phase.Live, fromFile = true) }
         noteRelay()
@@ -563,12 +570,17 @@ class LiveSessionController(
         return voice
     }
 
-    private fun newAsrSession(direction: String, endpoint: String, voice: Silero): StretchSession {
+    private fun newAsrSession(
+        direction: String,
+        endpoint: String,
+        index: IndexTarget,
+        voice: Silero,
+    ): StretchSession {
         val parts = direction.split("-", limit = 2)
         val src = parts.getOrElse(0) { "zh" }
         val tgt = parts.getOrElse(1) { "en" }
         val recognizer = QwenAsr(http, endpoint)
-        val translator = IndexTranslator(http, src, tgt)
+        val translator = IndexTranslator(http, src, tgt, index.url, index.model)
         return StretchSession(
             parent = scope,
             srcLang = src,

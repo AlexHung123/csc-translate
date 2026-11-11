@@ -2,21 +2,22 @@ package com.csc.translate.pipeline
 
 import kotlin.math.sqrt
 
-// 32 ms frames. A run of voice is backdated 64 ms and a run of silence 96 ms, matching the
-// desktop engine. The stretch runner still waits 0.25 s to open and 1 s to close.
+// 32 ms frames. Voice starts after two frames at or over 0.5, and stops after three under 0.35,
+// at the first frame of that run. A single loud frame is a click, not speech. The stretch runner
+// still waits 0.25 s to open and 1 s to close.
 
-private const val VOICE_ON = 2 * FRAME
-private const val VOICE_OFF = 3 * FRAME
+private const val SCORE_ON = 0.5f
+private const val SCORE_OFF = 0.35f
 
 internal interface Voice {
     fun accept(frame: FloatArray)
-    val hot: Boolean
+    val score: Float
 }
 
 /** Loudness gate kept for tests. A sine wave is speech here and is not speech to Silero. */
 internal class Level(private val floor: Double) : Voice {
     private var noise = 0.0
-    override var hot: Boolean = false
+    override var score: Float = 0f
         private set
 
     override fun accept(frame: FloatArray) {
@@ -28,8 +29,9 @@ internal class Level(private val floor: Double) : Voice {
             val raised = noise * 2.5
             if (raised > limit) limit = raised
         }
-        hot = rms >= limit && rms >= 0.008
-        if (!hot) {
+        val loud = rms >= limit && rms >= 0.008
+        score = if (loud) 1f else 0f
+        if (!loud) {
             noise = if (noise == 0.0) rms else noise * 0.9 + rms * 0.1
         }
     }
@@ -41,20 +43,28 @@ internal class Detector(private val gate: Voice) {
     private var buf = FloatArray(0)
     private var samples = 0L
     private var voice = false
+    private var run = 0
+    private var runStart = 0L
 
     fun push(samplesIn: FloatArray): List<VoiceAt> {
         val changes = mutableListOf<VoiceAt>()
         buf += samplesIn
         while (buf.size >= FRAME) {
+            val start = samples
             gate.accept(buf.copyOfRange(0, FRAME))
             buf = buf.copyOfRange(FRAME, buf.size)
             samples += FRAME
-            val on = gate.hot
-            if (on != voice) {
-                voice = on
-                val run = if (on) VOICE_ON else VOICE_OFF
-                val t = maxOf(0L, samples - run).toDouble() / RATE
-                changes += VoiceAt(on, t)
+            val other = if (voice) gate.score < SCORE_OFF else gate.score >= SCORE_ON
+            if (!other) {
+                run = 0
+                continue
+            }
+            if (run == 0) runStart = start
+            run++
+            if (run >= if (voice) 3 else 2) {
+                voice = !voice
+                run = 0
+                changes += VoiceAt(voice, runStart.toDouble() / RATE)
             }
         }
         return changes

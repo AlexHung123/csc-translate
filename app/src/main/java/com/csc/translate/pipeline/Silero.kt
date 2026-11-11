@@ -6,8 +6,9 @@ import ai.onnxruntime.OrtSession
 
 /**
  * Silero VAD v4, the 16 kHz ONNX export shipped with sherpa-onnx (MIT).
- * Inputs are `x`, `h`, and `c`. A frame is speech at 0.5, and stays speech down to 0.35 so one
- * quiet window does not flip the stretch runner.
+ * Inputs are `x`, `h`, and `c`. [score] is this frame's speech probability. The detector, not
+ * this model, waits for two frames at or over 0.5 before speech, and three under 0.35 before
+ * silence.
  */
 internal class Silero(model: ByteArray) : Voice, AutoCloseable {
     private val env = OrtEnvironment.getEnvironment()
@@ -16,7 +17,7 @@ internal class Silero(model: ByteArray) : Voice, AutoCloseable {
     private val c = Array(2) { Array(1) { FloatArray(STATE) } }
     private val gate = Any()
     private var closed = false
-    override var hot: Boolean = false
+    override var score: Float = 0f
         private set
 
     init {
@@ -39,8 +40,7 @@ internal class Silero(model: ByteArray) : Voice, AutoCloseable {
             val cIn = OnnxTensor.createTensor(env, c)
             try {
                 session.run(mapOf("x" to x, "h" to hIn, "c" to cIn)).use { out ->
-                    val prob = readProb(out.get(0).value)
-                    hot = prob >= if (hot) HOLD else OPEN
+                    score = readProb(out.get(0).value)
                     readState(out.get(1).value, h)
                     readState(out.get(2).value, c)
                 }
@@ -77,7 +77,5 @@ internal class Silero(model: ByteArray) : Voice, AutoCloseable {
 
     private companion object {
         const val STATE = 64
-        const val OPEN = 0.5f
-        const val HOLD = 0.35f
     }
 }

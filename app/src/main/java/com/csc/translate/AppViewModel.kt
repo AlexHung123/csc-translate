@@ -77,6 +77,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { container.settings.setActiveUrl(url) }
     }
 
+    fun setIndexUrl(url: String) {
+        viewModelScope.launch { container.settings.setIndexUrl(url) }
+    }
+
     fun setRelayUrl(url: String) {
         viewModelScope.launch {
             container.settings.setRelayUrl(url)

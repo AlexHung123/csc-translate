@@ -61,6 +61,7 @@ data class UserSettings(
     val pipeline: Pipeline = Pipeline.Tomoru,
     val baseUrl: String = DEFAULT_BASE_URL,
     val tomoruUrl: String = "",
+    val indexUrl: String = LOCAL_INDEX_URL,
     val relayUrl: String = DEFAULT_RELAY_URL,
     val shareRelay: Boolean = true,
     val meetingId: String = "",
@@ -78,10 +79,26 @@ data class UserSettings(
         Pipeline.Simul -> baseUrl
         Pipeline.Tomoru -> tomoruUrl
     }.trim().trimEnd('/')
+
+    /** A blank address keeps the public Bilibili server and its model id. */
+    fun indexTarget(): IndexTarget {
+        val local = indexUrl.trim().trimEnd('/')
+        return if (local.isEmpty()) {
+            IndexTarget(DEFAULT_INDEX_URL, CLOUD_INDEX_MODEL)
+        } else {
+            IndexTarget(local, LOCAL_INDEX_MODEL)
+        }
+    }
 }
+
+data class IndexTarget(val url: String, val model: String)
 
 const val DEFAULT_BASE_URL = "http://192.168.1.241:8080"
 const val DEFAULT_RELAY_URL = "http://192.168.1.58:8091"
+const val DEFAULT_INDEX_URL = "https://index-translate.bilibili.com"
+const val LOCAL_INDEX_URL = "http://192.168.1.241:8080"
+const val CLOUD_INDEX_MODEL = "Index-Translate-35B-A3B"
+const val LOCAL_INDEX_MODEL = "IndexTeam/Index-Translate-35B-A3B-preview-FP4"
 
 class SettingsStore(context: Context) {
     private val dataStore = context.applicationContext.settingsDataStore
@@ -91,6 +108,7 @@ class SettingsStore(context: Context) {
             pipeline = if (SHOW_PIPELINE_CHOICE) Pipeline.from(prefs[KEY_PIPELINE]) else Pipeline.Tomoru,
             baseUrl = prefs[KEY_URL] ?: DEFAULT_BASE_URL,
             tomoruUrl = prefs[KEY_TOMORU_URL] ?: "",
+            indexUrl = prefs[KEY_INDEX_URL] ?: LOCAL_INDEX_URL,
             relayUrl = prefs[KEY_RELAY_URL] ?: DEFAULT_RELAY_URL,
             shareRelay = prefs[KEY_SHARE_RELAY] ?: true,
             meetingId = prefs[KEY_MEETING].orEmpty(),
@@ -118,6 +136,10 @@ class SettingsStore(context: Context) {
     suspend fun setTomoruUrl(url: String) {
         val cleaned = cleanUrl(url) ?: return
         dataStore.edit { it[KEY_TOMORU_URL] = cleaned }
+    }
+
+    suspend fun setIndexUrl(url: String) {
+        dataStore.edit { it[KEY_INDEX_URL] = url.trim().trimEnd('/') }
     }
 
     suspend fun setRelayUrl(url: String) {
@@ -194,6 +216,7 @@ class SettingsStore(context: Context) {
         val KEY_PIPELINE = stringPreferencesKey("pipeline")
         val KEY_URL = stringPreferencesKey("base_url")
         val KEY_TOMORU_URL = stringPreferencesKey("tomoru_url")
+        val KEY_INDEX_URL = stringPreferencesKey("index_url")
         val KEY_RELAY_URL = stringPreferencesKey("relay_url")
         val KEY_SHARE_RELAY = booleanPreferencesKey("share_relay")
         val KEY_MEETING = stringPreferencesKey("meeting_id")

@@ -147,3 +147,152 @@ internal fun splitHypothesis(text: String): Pair<List<String>, String> {
 }
 
 internal fun lettersOf(text: String): Int = text.count { it.isLetterOrDigit() }
+
+/** Two lines of subtitles. A wide character, as CJK's, counts as two letters. */
+internal const val MAX_WIDTH = 90
+
+private const val TAIL_PUNCT = "。．.！!？?、，,"
+
+/** A partial decode's own closing punctuation is not the speaker finishing. */
+internal fun stripVolatileEnd(text: String): String =
+    text.trimEnd { it.isWhitespace() || it in TAIL_PUNCT }
+
+/**
+ * How far [committed] reaches into [hypothesis], as a string index. Letters and digits are
+ * aligned by edit distance; punctuation after the match is included. A changed word in the
+ * middle does not pull the already shown sentence back onto the screen.
+ */
+internal fun alignEnd(committed: String, hypothesis: String): Int {
+    val x = ArrayList<Char>()
+    for (ch in committed) if (ch.isLetterOrDigit()) x += ch.lowercaseChar()
+    val hs = ArrayList<Pair<Char, Int>>()
+    for (i in hypothesis.indices) {
+        val ch = hypothesis[i]
+        if (ch.isLetterOrDigit()) hs += ch.lowercaseChar() to (i + 1)
+    }
+    if (x.isEmpty() || hs.isEmpty()) return 0
+    var prev = IntArray(hs.size + 1) { it }
+    var cur = IntArray(hs.size + 1)
+    for (xr in x) {
+        cur[0] = prev[0] + 1
+        for (j in 1..hs.size) {
+            val sub = prev[j - 1] + if (hs[j - 1].first == xr) 0 else 1
+            cur[j] = minOf(prev[j] + 1, cur[j - 1] + 1, sub)
+        }
+        val swap = prev
+        prev = cur
+        cur = swap
+    }
+    var best = 0
+    for (j in prev.indices) if (prev[j] < prev[best]) best = j
+    var end = if (best > 0) hs[best - 1].second else 0
+    while (end < hypothesis.length && !hypothesis[end].isLetterOrDigit()) end++
+    return end
+}
+
+internal fun alignedTail(committed: String, hypothesis: String): String {
+    if (committed.isEmpty()) return hypothesis
+    val cut = alignEnd(committed, hypothesis)
+    return if (cut >= hypothesis.length) "" else hypothesis.substring(cut)
+}
+
+/** Index just past the first sentence end, or -1. A final may end on the mark; a partial needs speech after it. */
+internal fun nextSentence(text: String, requireAfter: Boolean): Int {
+    for (i in text.indices) {
+        if (text[i] !in sentenceEnd) continue
+        if (!text.substring(0, i + 1).any { it.isLetterOrDigit() }) continue
+        if (requireAfter && !text.substring(i + 1).any { it.isLetterOrDigit() }) continue
+        return i + 1
+    }
+    return -1
+}
+
+internal fun textWidth(text: String): Int {
+    var w = 0
+    for (ch in text) w += if (ch.isEastAsianWide()) 2 else 1
+    return w
+}
+
+/**
+ * Where to cut [text] so the head fits two lines: after a clause mark when that leaves at least
+ * a third of the width, else between words. -1 when there is no such break (Chinese with no comma).
+ */
+internal fun cutWithin(text: String): Int {
+    var fits = 0
+    while (fits < text.length && textWidth(text.substring(0, fits + 1)) <= MAX_WIDTH) fits++
+    if (fits >= text.length) return -1
+    var clause = -1
+    var word = -1
+    for (i in 1 until fits) {
+        if (text[i - 1].isClause() && lettersOf(text.substring(0, i)) >= 6) clause = i
+        if (text[i].isWhitespace() && text[i - 1].isLetterOrDigit() && lettersOf(text.substring(0, i)) >= 6) {
+            word = i
+        }
+    }
+    return when {
+        clause > 0 && textWidth(text.substring(0, clause)) * 3 >= MAX_WIDTH -> clause
+        word > 0 -> word
+        clause > 0 -> clause
+        else -> -1
+    }
+}
+
+/** Pieces a decode is compared by: one character for Han and kana, one word otherwise. */
+internal fun textPieces(text: String): List<String> {
+    val out = mutableListOf<String>()
+    val word = StringBuilder()
+    fun flush() {
+        if (word.isNotEmpty()) {
+            out += word.toString()
+            word.clear()
+        }
+    }
+    for (ch in text) {
+        when {
+            ch.isKanaOrHan() || ch.isPunctuation() -> {
+                flush()
+                out += ch.toString()
+            }
+            ch.isWhitespace() -> {
+                flush()
+                word.append(ch)
+            }
+            else -> word.append(ch)
+        }
+    }
+    flush()
+    return out
+}
+
+private fun Char.isClause(): Boolean = this in "，、,；;：:"
+
+private fun Char.isKanaOrHan(): Boolean {
+    val c = code
+    return c in 0x3400..0x4DBF || c in 0x4E00..0x9FFF || c in 0x3040..0x30FF || c in 0xF900..0xFAFF
+}
+
+private fun Char.isPunctuation(): Boolean = when (Character.getType(this).toByte()) {
+    Character.CONNECTOR_PUNCTUATION,
+    Character.DASH_PUNCTUATION,
+    Character.START_PUNCTUATION,
+    Character.END_PUNCTUATION,
+    Character.INITIAL_QUOTE_PUNCTUATION,
+    Character.FINAL_QUOTE_PUNCTUATION,
+    Character.OTHER_PUNCTUATION,
+    -> true
+    else -> false
+}
+
+private fun Char.isEastAsianWide(): Boolean {
+    val c = code
+    return c in 0x1100..0x115F ||
+        c in 0x2329..0x232A ||
+        c in 0x2E80..0xA4CF ||
+        c in 0xAC00..0xD7A3 ||
+        c in 0xF900..0xFAFF ||
+        c in 0xFE10..0xFE19 ||
+        c in 0xFE30..0xFE6F ||
+        c in 0xFF00..0xFF60 ||
+        c in 0xFFE0..0xFFE6 ||
+        c in 0x20000..0x3FFFD
+}
