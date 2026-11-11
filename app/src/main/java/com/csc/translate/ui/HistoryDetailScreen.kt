@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -39,6 +40,7 @@ fun HistoryDetailScreen(
     session: SessionEntity?,
     settings: UserSettings,
     onBack: () -> Unit,
+    onDownload: (SessionEntity) -> Unit,
 ) {
     val labels = directionLabels(session?.direction ?: "en-zh")
     Column(
@@ -67,6 +69,11 @@ fun HistoryDetailScreen(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (session != null) {
+                IconButtonCircle(onClick = { onDownload(session) }, label = stringResource(R.string.download)) {
+                    Icon(Icons.Outlined.Download, contentDescription = null, tint = Ink)
+                }
+            }
         }
         if (session == null) {
             Text(

@@ -77,6 +77,9 @@
     <string name="swap_direction">Switch translation direction</string>
     <string name="back">Back</string>
     <string name="history">History</string>
+    <string name="download">Download</string>
+    <string name="download_saved">Saved to Downloads</string>
+    <string name="download_fail">Could not save the text</string>
     <string name="pause">Pause</string>
     <string name="resume">Resume</string>
     <string name="stop">Stop</string>

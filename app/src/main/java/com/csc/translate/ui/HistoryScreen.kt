@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
@@ -53,6 +54,7 @@ fun HistoryScreen(
     inProgress: Boolean,
     onBack: () -> Unit,
     onOpen: (String) -> Unit,
+    onDownload: (SessionEntity) -> Unit,
     onDelete: (List<String>) -> Unit,
 ) {
     var editing by rememberSaveable { mutableStateOf(false) }
@@ -146,6 +148,7 @@ fun HistoryScreen(
                             selected = if (item.id in selected) selected - item.id else selected + item.id
                         },
                         onOpen = { onOpen(item.id) },
+                        onDownload = { onDownload(item) },
                     )
                     HorizontalDivider(color = Color(0xFFF0F0F0), thickness = 1.dp)
                 }
@@ -161,6 +164,7 @@ private fun HistoryRow(
     checked: Boolean,
     onToggle: () -> Unit,
     onOpen: () -> Unit,
+    onDownload: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -209,6 +213,16 @@ private fun HistoryRow(
                         modifier = Modifier.padding(start = 4.dp),
                     )
                 }
+            }
+        }
+        if (!editing) {
+            IconButtonCircle(onClick = onDownload, label = stringResource(R.string.download)) {
+                Icon(
+                    Icons.Outlined.Download,
+                    contentDescription = null,
+                    tint = Ink,
+                    modifier = Modifier.size(22.dp),
+                )
             }
         }
         Icon(

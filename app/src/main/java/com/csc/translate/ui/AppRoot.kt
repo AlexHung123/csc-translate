@@ -29,6 +29,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.csc.translate.data.db.SessionEntity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -113,6 +116,39 @@ fun AppRoot(viewModel: AppViewModel) {
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) viewModel.startFile(uri)
+    }
+    var pendingExport by remember { mutableStateOf<SessionEntity?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        val session = pendingExport
+        pendingExport = null
+        if (uri == null || session == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val saved = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use { stream ->
+                        stream.write(historyTranscript(session).toByteArray(Charsets.UTF_8))
+                    } ?: error("stream")
+                }.isSuccess
+            }
+            val message = if (saved) R.string.download_saved else R.string.download_fail
+            snackbar.showSnackbar(context.getString(message))
+        }
+    }
+    fun downloadSession(session: SessionEntity) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            scope.launch {
+                val saved = withContext(Dispatchers.IO) {
+                    runCatching { saveTranscriptToDownloads(context, session) }.isSuccess
+                }
+                val message = if (saved) R.string.download_saved else R.string.download_fail
+                snackbar.showSnackbar(context.getString(message))
+            }
+        } else {
+            pendingExport = session
+            exportLauncher.launch(historyFileName(session))
+        }
     }
     LaunchedEffect(micDenied) {
         if (micDenied) {
@@ -238,6 +274,7 @@ fun AppRoot(viewModel: AppViewModel) {
                     inProgress = live.inProgress,
                     onBack = { nav.popBackStack() },
                     onOpen = { id -> nav.navigate("history/$id") },
+                    onDownload = ::downloadSession,
                     onDelete = viewModel::deleteSessions,
                 )
             }
@@ -250,6 +287,7 @@ fun AppRoot(viewModel: AppViewModel) {
                     session = history.firstOrNull { it.id == id } ?: viewModel.session(id.orEmpty()),
                     settings = settings,
                     onBack = { nav.popBackStack() },
+                    onDownload = ::downloadSession,
                 )
             }
         }
