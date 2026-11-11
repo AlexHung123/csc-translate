@@ -10,6 +10,7 @@ import com.csc.translate.pipeline.VoiceAt
 import com.csc.translate.pipeline.alignEnd
 import com.csc.translate.pipeline.asrAnswer
 import com.csc.translate.pipeline.splitHypothesis
+import com.csc.translate.pipeline.stripVolatileEnd
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -59,31 +60,27 @@ class PipelineTest {
     }
 
     @Test
-    fun addedWordsShowAtOnceAndAChangedPrefixWaits() {
+    fun twoDecodesAgreeBeforeThePrefixChanges() {
         val h = Hypothesis()
+        assertEquals("", h.settle("你好世界"))
         assertEquals("你好世界", h.settle("你好世界"))
-        assertEquals("你好世界呀", h.settle("你好世界呀"))
-        assertEquals("你好世界呀", h.settle("您好世界呀"))
+        assertEquals("你好世界", h.settle("您好世界呀"))
         assertEquals("您好世界呀", h.settle("您好世界呀"))
-        assertEquals("您好世界呀", h.settle("你好"))
-        assertEquals("你好", h.settle("你好"))
-        val tail = Hypothesis()
-        assertEquals("今天天气", tail.settle("今天天气。"))
-        assertEquals("今天天气不错", tail.settle("今天天气不错"))
     }
 
     @Test
     fun aSentenceLocksAndALaterDecodeKeepsIt() {
         val h = Hypothesis()
+        h.settle("你好。我是")
         val agreed = h.settle("你好。我是")
-        val locked = h.absorb(agreed, h.alignPrefix, final = false, quiet = false)
+        val locked = h.absorb(stripVolatileEnd(agreed), h.alignPrefix, final = false, quiet = false)
         assertEquals(listOf("你好。"), locked)
         assertEquals("我是", h.pending)
-        val grown = h.settle("你好。我是小明")
+        h.settle("你好。我是小明")
+        val grown = stripVolatileEnd(h.settle("你好。我是小明啊"))
         val more = h.absorb(grown, h.alignPrefix, final = false, quiet = false)
         assertEquals(emptyList<String>(), more)
         assertEquals("我是小明", h.pending)
-        assertEquals("你好。我是小明", h.settle("您好。我是小红"))
         assertEquals(3, alignEnd("你好。", "你好。我是小明"))
     }
 
@@ -99,12 +96,15 @@ class PipelineTest {
     @Test
     fun aFinalTailWaitsThenJoinsTheNextStretch() {
         val h = Hypothesis()
-        h.absorb(h.settle("你好。今天"), h.alignPrefix, final = false, quiet = false)
+        h.settle("你好。今天")
+        val agreed = stripVolatileEnd(h.settle("你好。今天"))
+        h.absorb(agreed, h.alignPrefix, final = false, quiet = false)
         val fin = h.absorb("你好。今天", h.alignPrefix, final = true, quiet = false)
         assertEquals(emptyList<String>(), fin)
         assertEquals("今天", h.pending)
         h.resetStretch()
-        val joined = h.absorb(h.settle("天气"), h.alignPrefix, final = false, quiet = false)
+        h.settle("天气")
+        val joined = h.absorb(stripVolatileEnd(h.settle("天气")), h.alignPrefix, final = false, quiet = false)
         assertEquals(emptyList<String>(), joined)
         assertEquals("今天天气", h.pending)
         val held = h.absorb("天气", h.alignPrefix, final = true, quiet = false)

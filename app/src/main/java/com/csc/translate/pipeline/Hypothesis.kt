@@ -1,11 +1,9 @@
 package com.csc.translate.pipeline
 
 /**
- * What a stretch's decodes may change on screen. A partial shows at once when it only continues
- * what is already there. A different reading waits until the next decode agrees, and a shorter
- * one replaces the old text only when both say the same thing. A sentence, or a two-line cut,
- * stays as it was first shown. The unfinished tail of a final waits, and the next stretch's
- * words append to it.
+ * What a stretch's decodes may change on screen. A partial shows only the prefix two decodes in a
+ * row share, and never a shorter one. A sentence, or a two-line cut, stays as it was first shown.
+ * The unfinished tail of a final waits, and the next stretch's words append to it.
  */
 internal class Hypothesis {
     private var prefix = ""
@@ -26,18 +24,15 @@ internal class Hypothesis {
         prefix = ""
     }
 
-    /**
-     * The first result shows. Words added after it show at once. A different reading of what is
-     * already shown waits until the next decode says it too.
-     */
+    /** Empty until a second decode exists. The newest unmatched word waits for the one after. */
     fun settle(text: String): String {
-        val cur = textPieces(stripVolatileEnd(text))
+        val cur = textPieces(text)
         val prev = last
-        if (prev == null || extends(agreed, cur)) {
-            agreed = cur
-        } else {
-            val n = commonCount(prev, cur)
-            if (n >= agreed.size || (n > 0 && n == prev.size && n == cur.size)) agreed = cur
+        if (prev != null) {
+            var n = 0
+            val limit = minOf(prev.size, cur.size)
+            while (n < limit && prev[n] == cur[n]) n++
+            if (n >= agreed.size) agreed = cur.take(n)
         }
         last = cur
         return agreed.joinToString("")
@@ -114,18 +109,5 @@ internal class Hypothesis {
         pending = ""
         if (!rest.any { it.isLetterOrDigit() }) return emptyList()
         return absorb(rest, align = "", final = true, quiet = true)
-    }
-
-    private fun extends(shown: List<String>, cur: List<String>): Boolean {
-        if (cur.size < shown.size) return false
-        for (i in shown.indices) if (shown[i] != cur[i]) return false
-        return true
-    }
-
-    private fun commonCount(left: List<String>, right: List<String>): Int {
-        val limit = minOf(left.size, right.size)
-        var n = 0
-        while (n < limit && left[n] == right[n]) n++
-        return n
     }
 }

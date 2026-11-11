@@ -26,9 +26,8 @@ private const val DRAFT_GAP_MS = 600L
 /**
  * The phone's ASR + translate path. It hears 16 kHz PCM, cuts speech the way Tomoru's Qwen3-ASR
  * stretch runner does, asks [decode] for the text, and [translate] for each line. A partial
- * shows a new word as soon as a decode adds it. A different reading waits until the next
- * decode agrees. A sentence stays once shown. The unfinished tail of a final waits 0.6 s,
- * and joins the next stretch if the speaker goes on.
+ * shows only what two decodes share. A sentence stays once shown. The unfinished tail of a final
+ * waits 0.6 s, and joins the next stretch if the speaker goes on.
  */
 internal class StretchSession(
     parent: CoroutineScope,
@@ -281,7 +280,12 @@ internal class StretchSession(
         } else {
             val agreed = hypothesis.settle(text)
             if (splitHypothesis(agreed).first.isNotEmpty()) ended = true
-            hypothesis.absorb(agreed, hypothesis.alignPrefix, final = false, quiet = false)
+            hypothesis.absorb(
+                stripVolatileEnd(agreed),
+                hypothesis.alignPrefix,
+                final = false,
+                quiet = false,
+            )
         }
         if (newly.isNotEmpty()) trace("lock ${newly.joinToString("|").take(80)}")
         publish(newly)
