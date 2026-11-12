@@ -115,6 +115,7 @@ class LiveSessionController(
     private val relayShare = RelayShare(RelayClient(http, json), scope)
     private val shareRelay = AtomicBoolean(true)
     private var relayNote = 0
+    private var lastRelaySyncAt = 0L
 
     init {
         relayShare.onWatchUrl = { url ->
@@ -128,6 +129,16 @@ class LiveSessionController(
         scope.launch {
             settings.flow.collect {
                 if (_state.value.inProgress) noteRelay()
+            }
+        }
+        // A quiet meeting still counts as in progress. Refresh the relay so a
+        // break with nobody speaking is not closed as an ended meeting.
+        scope.launch {
+            while (true) {
+                delay(RELAY_HEARTBEAT_MS)
+                if (!_state.value.inProgress) continue
+                if (System.currentTimeMillis() - lastRelaySyncAt < RELAY_HEARTBEAT_MS) continue
+                noteRelay()
             }
         }
     }
@@ -867,6 +878,7 @@ class LiveSessionController(
             }
             val latest = _state.value
             if (!latest.inProgress || note != relayNote) return@launch
+            lastRelaySyncAt = System.currentTimeMillis()
             relayShare.resume()
             relayShare.sync(base, meetingId, user.passcode, relayPicture(latest, user, relayStatus(latest)))
         }
@@ -929,5 +941,6 @@ class LiveSessionController(
 
     private companion object {
         const val TAG = "CscTranslate"
+        const val RELAY_HEARTBEAT_MS = 15_000L
     }
 }
