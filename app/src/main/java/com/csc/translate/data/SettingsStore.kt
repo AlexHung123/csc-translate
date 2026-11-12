@@ -94,7 +94,7 @@ data class UserSettings(
 data class IndexTarget(val url: String, val model: String)
 
 const val DEFAULT_BASE_URL = "http://192.168.1.241:8080"
-const val DEFAULT_RELAY_URL = "http://192.168.1.58:8091"
+const val DEFAULT_RELAY_URL = "http://192.168.1.58:8443"
 const val DEFAULT_INDEX_URL = "https://index-translate.bilibili.com"
 const val LOCAL_INDEX_URL = "http://192.168.1.241:8080"
 const val CLOUD_INDEX_MODEL = "Index-Translate-35B-A3B"

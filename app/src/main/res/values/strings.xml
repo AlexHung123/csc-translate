@@ -95,7 +95,7 @@
     <string name="relay_share">Send to watch server</string>
     <string name="relay_share_off">Off. Translation stays on this tablet.</string>
     <string name="relay_url">Watch server</string>
-    <string name="relay_url_hint">http://192.168.1.58:8091</string>
+    <string name="relay_url_hint">http://192.168.1.58:8443</string>
     <string name="relay_note">During a session, tap the watch link to copy it. People on this network open it in a browser.</string>
     <string name="meeting_id">Meeting ID</string>
     <string name="meeting_reset">Reset</string>

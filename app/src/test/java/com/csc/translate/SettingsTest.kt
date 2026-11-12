@@ -62,7 +62,7 @@ class SettingsTest {
     @Test
     fun relayUrlDefaultsToThisComputer() {
         assertEquals(DEFAULT_RELAY_URL, UserSettings().relayUrl)
-        assertEquals("http://192.168.1.58:8091", UserSettings().relayUrl)
+        assertEquals("http://192.168.1.58:8443", UserSettings().relayUrl)
     }
 
     @Test
