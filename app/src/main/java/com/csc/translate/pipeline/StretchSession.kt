@@ -1,8 +1,10 @@
 package com.csc.translate.pipeline
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -12,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
 
@@ -22,12 +25,18 @@ private const val GAP = RATE
 private const val LONGEST = 15 * RATE
 private const val TAIL_WAIT = (0.6 * RATE).toInt()
 private const val DRAFT_GAP_MS = 600L
+private const val TRANSLATION_QUEUE = 64
 
 /**
  * The phone's ASR + translate path. It hears 16 kHz PCM, cuts speech the way Tomoru's Qwen3-ASR
  * stretch runner does, asks [decode] for the text, and [translate] for each line. A partial
  * shows only what two decodes share. A sentence stays once shown. The unfinished tail of a final
  * waits 0.6 s, and joins the next stretch if the speaker goes on.
+ *
+ * Finished lines wait in a queue of [translationQueue] and are translated one at a time, as
+ * Tomoru's live session does. A line that does not fit is left untranslated. The draft of a line
+ * stays on screen until its translation returns, and the draft request in flight is cancelled
+ * when the line is committed.
  */
 internal class StretchSession(
     parent: CoroutineScope,
@@ -39,10 +48,12 @@ internal class StretchSession(
     private val voice: Voice = Level(floor),
     private val onView: (src: String, tgt: String) -> Unit = { _, _ -> },
     private val onError: (Throwable) -> Unit = {},
+    private val translationQueue: Int = TRANSLATION_QUEUE,
 ) {
     private val scope = CoroutineScope(SupervisorJob(parent.coroutineContext[Job]) + Dispatchers.Default)
     private val detector = Detector(voice)
     private val incoming = Channel<Incoming>(Channel.UNLIMITED)
+    private val translations = Channel<Work>(translationQueue)
     private val lock = Any()
     private val inflight = AtomicInteger(0)
     private val finished = CompletableDeferred<Unit>()
@@ -67,6 +78,7 @@ internal class StretchSession(
     private var pending = ""
     private var draft = ""
     private var draftBusy = false
+    private var draftJob: Job? = null
     private var draftLen = 0
     private var draftAt = 0L
     private var draftGen = 0
@@ -77,9 +89,15 @@ internal class StretchSession(
         try {
             run()
         } catch (t: Throwable) {
-            if (t !is kotlinx.coroutines.CancellationException) onError(t)
+            if (t !is CancellationException) onError(t)
         } finally {
             finished.complete(Unit)
+        }
+    }
+
+    init {
+        scope.launch {
+            for (work in translations) translateFinal(work)
         }
     }
 
@@ -292,21 +310,32 @@ internal class StretchSession(
     }
 
     private fun publish(newly: List<String>) {
-        val jobs = mutableListOf<Work>()
+        var draftWork: Work? = null
         val view: Pair<String, String>
         synchronized(lock) {
-            if (newly.isNotEmpty()) draftGen++
-            val gen = draftGen
             for (sentence in newly) {
-                lines += Line(sentence, "")
-                jobs += Work(lines.lastIndex, sentence, draft = false, gen = gen)
+                val kept = draft
+                draft = ""
+                draftLen = 0
+                draftGen++
+                cancelDraft()
+                val line = Line(sentence)
+                line.draft = kept
+                lines += line
+                val work = Work(lines.lastIndex, sentence, draft = false, gen = draftGen)
+                inflight.incrementAndGet()
+                if (translations.trySend(work).isFailure) {
+                    inflight.decrementAndGet()
+                    line.skipped = true
+                    line.draft = ""
+                }
             }
             pending = hypothesis.pending
             if (hypothesis.pending.isEmpty() && newly.isNotEmpty()) {
                 draft = ""
                 draftLen = 0
             }
-            maybeDraft()?.let { jobs += it }
+            draftWork = maybeDraft()
             view = source() to target()
         }
         val (src, tgt) = view
@@ -315,7 +344,7 @@ internal class StretchSession(
         }
         shown = src
         onView(src, tgt)
-        jobs.forEach { send(it) }
+        draftWork?.let { launchDraft(it) }
     }
 
     private fun maybeDraft(): Work? {
@@ -341,30 +370,84 @@ internal class StretchSession(
         return Work(index = -1, text = text, draft = true, gen = draftGen)
     }
 
-    private fun send(work: Work) {
+    /** Drops the draft request. The caller holds [lock]. */
+    private fun cancelDraft() {
+        draftJob?.cancel()
+        draftJob = null
+        draftBusy = false
+    }
+
+    private fun launchDraft(work: Work) {
         inflight.incrementAndGet()
-        scope.launch {
+        val ran = AtomicBoolean(false)
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            ran.set(true)
             try {
-                val out = withContext(Dispatchers.IO) { translate(work.text, work.draft) }
+                val out = translate(work.text, true)
+                var next: Work? = null
                 var view: Pair<String, String>? = null
                 synchronized(lock) {
-                    if (work.draft) {
-                        if (work.gen == draftGen && out.isNotBlank()) draft = out
+                    if (work.gen == draftGen && out.isNotBlank()) draft = out
+                    if (draftJob === coroutineContext[Job]) {
                         draftBusy = false
-                        val next = maybeDraft()
-                        view = source() to target()
-                        if (next != null) send(next)
-                    } else if (out.isNotBlank() && work.index in lines.indices && lines[work.index].src == work.text) {
-                        lines[work.index].tgt = out
+                        draftJob = null
+                        next = maybeDraft()
                         view = source() to target()
                     }
                 }
                 view?.let { (src, tgt) -> onView(src, tgt) }
+                if (next != null) launchDraft(next)
+            } catch (t: CancellationException) {
+                throw t
             } catch (_: Throwable) {
-                synchronized(lock) { if (work.draft) draftBusy = false }
+                synchronized(lock) {
+                    if (draftJob === coroutineContext[Job]) {
+                        draftBusy = false
+                        draftJob = null
+                    }
+                }
             } finally {
                 inflight.decrementAndGet()
             }
+        }
+        // A lazy job cancelled before it starts never runs its finally.
+        job.invokeOnCompletion { if (!ran.get()) inflight.decrementAndGet() }
+        synchronized(lock) {
+            if (work.gen != draftGen) {
+                job.cancel()
+                return
+            }
+            draftJob = job
+        }
+        job.start()
+    }
+
+    private suspend fun translateFinal(work: Work) {
+        try {
+            val out = translate(work.text, false)
+            var view: Pair<String, String>? = null
+            synchronized(lock) {
+                val line = lines.getOrNull(work.index)
+                if (line != null && line.src == work.text && out.isNotBlank()) {
+                    line.tgt = out
+                    view = source() to target()
+                }
+            }
+            view?.let { (src, tgt) -> onView(src, tgt) }
+        } catch (t: CancellationException) {
+            throw t
+        } catch (_: Throwable) {
+            var view: Pair<String, String>? = null
+            synchronized(lock) {
+                val line = lines.getOrNull(work.index)
+                if (line != null && line.tgt.isBlank()) {
+                    line.draft = ""
+                    view = source() to target()
+                }
+            }
+            view?.let { (src, tgt) -> onView(src, tgt) }
+        } finally {
+            inflight.decrementAndGet()
         }
     }
 
@@ -382,9 +465,14 @@ internal class StretchSession(
 
     private fun target(): String = buildString {
         for (line in lines) {
-            if (line.tgt.isBlank()) continue
+            val text = when {
+                line.tgt.isNotBlank() -> line.tgt
+                line.skipped -> ""
+                else -> line.draft
+            }
+            if (text.isBlank()) continue
             if (isNotEmpty()) append('\n')
-            append(line.tgt)
+            append(text)
         }
         if (draft.isNotBlank()) {
             if (isNotEmpty()) append('\n')
@@ -411,7 +499,12 @@ internal class StretchSession(
     }
 }
 
-private data class Line(val src: String, var tgt: String)
+private class Line(
+    val src: String,
+    var tgt: String = "",
+    var draft: String = "",
+    var skipped: Boolean = false,
+)
 
 private data class Pending(
     val pcm: ByteArray,

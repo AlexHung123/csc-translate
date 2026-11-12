@@ -11,6 +11,7 @@ import com.csc.translate.pipeline.alignEnd
 import com.csc.translate.pipeline.asrAnswer
 import com.csc.translate.pipeline.splitHypothesis
 import com.csc.translate.pipeline.stripVolatileEnd
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -174,6 +175,118 @@ class PipelineTest {
         val (src, tgt) = session.snapshot()
         assertTrue(src, src.contains("你好"))
         assertEquals("Hello.", tgt)
+        session.stop()
+    }
+
+    @Test
+    fun finishedLinesAreTranslatedOneAtATime() = runBlocking {
+        val hold = CompletableDeferred<Unit>()
+        val entered = Collections.synchronizedList(mutableListOf<String>())
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            decode = { "一一一一。二二二二。三三三三。還有尾" },
+            translate = { text, draft ->
+                if (!draft) {
+                    entered += text
+                    hold.await()
+                }
+                "T:$text"
+            },
+        )
+        session.write(sinePcm(24_000))
+        session.awaitIdle()
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        withTimeout(5_000) {
+            while (entered.isEmpty()) delay(10)
+        }
+        assertEquals(listOf("一一一一。"), entered.toList())
+        assertTrue(session.snapshot().first, session.snapshot().first.contains("二二二二"))
+        hold.complete(Unit)
+        session.write(ByteArray(24_000 * 2))
+        session.finish()
+        assertTrue(entered.toString(), entered.contains("二二二二。"))
+        session.stop()
+    }
+
+    @Test
+    fun aFullQueueLeavesTheExtraLineUntranslated() = runBlocking {
+        val hold = CompletableDeferred<Unit>()
+        val entered = Collections.synchronizedList(mutableListOf<String>())
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            translationQueue = 1,
+            decode = { "一一一一。二二二二。三三三三。還有尾" },
+            translate = { text, draft ->
+                if (!draft) {
+                    entered += text
+                    hold.await()
+                }
+                "T:$text"
+            },
+        )
+        session.write(sinePcm(24_000))
+        session.awaitIdle()
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        withTimeout(5_000) {
+            while (session.snapshot().first.contains("三三三三").not()) delay(10)
+        }
+        assertFalse(entered.toString(), "三三三三" in entered.joinToString())
+        hold.complete(Unit)
+        session.write(ByteArray(24_000 * 2))
+        session.finish()
+        val (src, tgt) = session.snapshot()
+        assertTrue(src, src.contains("三三三三"))
+        assertFalse(entered.toString(), "三三三三" in entered.joinToString())
+        assertFalse(tgt, tgt.contains("T:三三三三"))
+        session.stop()
+    }
+
+    @Test
+    fun theDraftStaysUntilTheLineIsTranslated() = runBlocking {
+        val hold = CompletableDeferred<Unit>()
+        var punctuate = false
+        val finals = Collections.synchronizedList(mutableListOf<String>())
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            decode = { if (punctuate) "你好世界。還有" else "你好世界" },
+            translate = { _, draft ->
+                if (draft) {
+                    "草稿"
+                } else {
+                    finals += "line"
+                    hold.await()
+                    "正式"
+                }
+            },
+        )
+        session.write(sinePcm(24_000))
+        session.awaitIdle()
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        withTimeout(5_000) {
+            while (session.snapshot().second.contains("草稿").not()) delay(10)
+        }
+        punctuate = true
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        withTimeout(5_000) {
+            while (finals.isEmpty()) delay(10)
+        }
+        assertTrue(session.snapshot().second, session.snapshot().second.contains("草稿"))
+        hold.complete(Unit)
+        session.write(ByteArray(24_000 * 2))
+        session.finish()
+        assertTrue(session.snapshot().second, session.snapshot().second.contains("正式"))
         session.stop()
     }
 }

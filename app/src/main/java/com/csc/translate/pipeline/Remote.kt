@@ -1,6 +1,7 @@
 package com.csc.translate.pipeline
 
 import com.csc.translate.net.restUrl
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -9,12 +10,18 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 private val json = Json { ignoreUnknownKeys = true }
 private val jsonType = "application/json".toMediaType()
@@ -75,7 +82,7 @@ class IndexTranslator(
     private val baseUrl: String,
     private val model: String,
 ) {
-    fun translate(text: String, draft: Boolean): String {
+    suspend fun translate(text: String, draft: Boolean): String {
         val body = buildJsonObject {
             put("model", model)
             put(
@@ -98,7 +105,7 @@ class IndexTranslator(
             .header("User-Agent", "Index-Translate-Client/1.0")
             .post(body.toString().toRequestBody(jsonType))
             .build()
-        return chatContent(client, request, 20)
+        return awaitContent(client, request, 20)
     }
 }
 
@@ -112,9 +119,36 @@ private fun execute(client: OkHttpClient, request: Request, seconds: Long): Stri
     }
 }
 
-private fun chatContent(client: OkHttpClient, request: Request, seconds: Long): String {
-    val raw = execute(client, request, seconds)
-    return json.parseToJsonElement(raw)
+private fun chatContent(client: OkHttpClient, request: Request, seconds: Long): String =
+    messageContent(execute(client, request, seconds))
+
+/** Cancelling the coroutine cancels the HTTP call, so a dropped draft does not keep the model busy. */
+private suspend fun awaitContent(client: OkHttpClient, request: Request, seconds: Long): String =
+    suspendCancellableCoroutine { cont ->
+        val call = client.newCall(request)
+        call.timeout().timeout(seconds, TimeUnit.SECONDS)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (cont.isActive) cont.resumeWithException(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    try {
+                        val raw = it.body?.string().orEmpty()
+                        if (!it.isSuccessful) error("HTTP ${it.code}")
+                        if (cont.isActive) cont.resume(messageContent(raw))
+                    } catch (t: Throwable) {
+                        if (cont.isActive) cont.resumeWithException(t)
+                    }
+                }
+            }
+        })
+    }
+
+private fun messageContent(raw: String): String =
+    json.parseToJsonElement(raw)
         .jsonObject["choices"]
         ?.jsonArray
         ?.firstOrNull()
@@ -126,7 +160,6 @@ private fun chatContent(client: OkHttpClient, request: Request, seconds: Long): 
         ?.contentOrNull
         ?.trim()
         .orEmpty()
-}
 
 internal fun indexPrompt(src: String, tgt: String, text: String, draft: Boolean): String {
     val notes = mutableListOf("【注意】这是直播实时字幕，请译成口语化、简洁的字幕")
