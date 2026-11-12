@@ -267,6 +267,7 @@ private fun FollowText(
     var revealed by remember { mutableIntStateOf(0) }
     var primed by remember { mutableStateOf(false) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var cursorOn by remember { mutableStateOf(true) }
 
     LaunchedEffect(text, english) {
         val now = System.currentTimeMillis()
@@ -276,15 +277,16 @@ private fun FollowText(
         revealed = cursor.revealed
         primed = cursor.primed
     }
-    // The clock decides the next character. Scrolling waits for layout, so it stays out of this loop.
-    LaunchedEffect(spans, english) {
+    // Keep running across new text. Restarting here cancelled the wait, so nothing was ever revealed.
+    // Scrolling waits for layout, so it stays out of this loop.
+    LaunchedEffect(english) {
         var marked = System.currentTimeMillis()
         while (true) {
             val full = spans.joinToString("") { it.text }
-            if (revealed >= full.length) break
             val now = System.currentTimeMillis()
-            if (revealed >= stableEnd(spans, now, english)) {
-                delay(settleWaitMs(spans, revealed, now))
+            if (revealed >= full.length || revealed >= stableEnd(spans, now, english)) {
+                val wait = if (revealed >= full.length) 16L else settleWaitMs(spans, revealed, now)
+                delay(wait)
                 marked = System.currentTimeMillis()
                 continue
             }
@@ -313,11 +315,20 @@ private fun FollowText(
             nowMs = System.currentTimeMillis()
         }
     }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(530)
+            cursorOn = !cursorOn
+        }
+    }
     val shown = buildAnnotatedString {
         for (piece in focusPieces(spans, revealed, nowMs)) {
             withStyle(SpanStyle(color = if (piece.focused) Ink else FocusDim)) {
                 append(piece.text)
             }
+        }
+        withStyle(SpanStyle(color = if (cursorOn) Ink else Color.Transparent)) {
+            append("▍")
         }
     }
     Text(
