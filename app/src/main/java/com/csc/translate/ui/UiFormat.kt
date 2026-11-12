@@ -28,7 +28,7 @@ fun formatHistoryDuration(ms: Long): String {
 }
 
 fun directionLabels(direction: String): Pair<String, String> {
-    return if (direction == "zh-en") "Chinese" to "English" else "English" to "Chinese"
+    return if (direction == "zh-en") "Cantonese" to "English" else "English" to "Cantonese"
 }
 
 fun paneStatus(

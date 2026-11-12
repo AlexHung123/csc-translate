@@ -74,6 +74,8 @@ fun LiveScreen(
     onCopied: () -> Unit,
 ) {
     val labels = directionLabels(live.direction)
+    val sourceEnglish = live.direction != "zh-en"
+    val targetEnglish = live.direction == "zh-en"
     val connecting = live.phase == Phase.Connecting
     val finishing = live.phase == Phase.Finishing
     val status = when {
@@ -115,6 +117,7 @@ fun LiveScreen(
                                 .fillMaxWidth(),
                             language = labels.first,
                             text = live.sourceText,
+                            english = sourceEnglish,
                             status = status,
                             background = Color.White,
                             typeScale = settings.typeScale,
@@ -126,6 +129,7 @@ fun LiveScreen(
                                 .padding(bottom = 96.dp),
                             language = labels.second,
                             text = live.targetText,
+                            english = targetEnglish,
                             status = status,
                             background = Pane,
                             typeScale = settings.typeScale,
@@ -139,6 +143,7 @@ fun LiveScreen(
                             .padding(bottom = 96.dp),
                         language = labels.second,
                         text = live.targetText,
+                        english = targetEnglish,
                         status = status,
                         background = Pane,
                         typeScale = settings.typeScale,
@@ -151,6 +156,7 @@ fun LiveScreen(
                             .padding(bottom = 96.dp),
                         language = labels.first,
                         text = live.sourceText,
+                        english = sourceEnglish,
                         status = status,
                         background = Color.White,
                         typeScale = settings.typeScale,
@@ -209,11 +215,15 @@ private fun TranscriptPane(
     modifier: Modifier,
     language: String,
     text: String,
+    english: Boolean,
     status: String,
     background: Color,
     typeScale: TypeScale,
 ) {
     val scroll = rememberScrollState()
+    LaunchedEffect(scroll.maxValue) {
+        if (text.isNotEmpty()) scroll.scrollTo(scroll.maxValue)
+    }
     Column(
         modifier = modifier
             .background(background)
@@ -228,11 +238,9 @@ private fun TranscriptPane(
         ) {
             FollowText(
                 text = text,
+                english = english,
                 fontSizeSp = typeScale.sp,
                 lineHeightSp = typeScale.lineHeight,
-                onAdvance = {
-                    if (text.isNotEmpty()) scroll.animateScrollTo(scroll.maxValue)
-                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(scroll),
@@ -250,55 +258,59 @@ private fun TranscriptPane(
 @Composable
 private fun FollowText(
     text: String,
+    english: Boolean,
     fontSizeSp: Int,
     lineHeightSp: Int,
-    onAdvance: suspend () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var spans by remember { mutableStateOf<List<FocusSpan>>(emptyList()) }
     var revealed by remember { mutableIntStateOf(0) }
     var primed by remember { mutableStateOf(false) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var cursorOn by remember { mutableStateOf(true) }
 
-    LaunchedEffect(text) {
+    LaunchedEffect(text, english) {
         val now = System.currentTimeMillis()
         nowMs = now
-        if (!primed) {
-            spans = if (text.isEmpty()) emptyList() else listOf(FocusSpan(text, now))
-            revealed = text.length
-            primed = true
-            return@LaunchedEffect
-        }
-        val previous = spans.joinToString("") { it.text }
-        val prefix = commonPrefixLength(previous, text)
-        spans = integrateSpans(spans, text, now)
-        if (prefix < revealed) revealed = prefix
-        if (revealed > text.length) revealed = text.length
+        val cursor = followCursor(spans, revealed, primed, text, english, now)
+        spans = cursor.spans
+        revealed = cursor.revealed
+        primed = cursor.primed
     }
-    LaunchedEffect(spans) {
+    // The clock decides the next character. Scrolling waits for layout, so it stays out of this loop.
+    LaunchedEffect(spans, english) {
+        var marked = System.currentTimeMillis()
         while (true) {
             val full = spans.joinToString("") { it.text }
             if (revealed >= full.length) break
-            delay(typeDelayMs(full[revealed], full.length - revealed))
+            val now = System.currentTimeMillis()
+            if (revealed >= stableEnd(spans, now, english)) {
+                delay(settleWaitMs(spans, revealed, now))
+                marked = System.currentTimeMillis()
+                continue
+            }
+            delay(typeDelayMs(full[revealed], full.length - revealed, english))
+            val after = System.currentTimeMillis()
             val latest = spans.joinToString("") { it.text }
-            if (revealed >= latest.length) break
-            revealed += 1
-            nowMs = System.currentTimeMillis()
-            onAdvance()
+            val next = advanceRevealed(
+                revealed,
+                latest,
+                stableEnd(spans, after, english),
+                after - marked,
+                english,
+            )
+            marked = after
+            if (next == revealed) continue
+            revealed = next
+            nowMs = after
         }
     }
     LaunchedEffect(spans) {
-        if (spans.isEmpty()) return@LaunchedEffect
-        while (true) {
-            delay(250)
+        while (spans.isNotEmpty()) {
+            val now = System.currentTimeMillis()
+            val nextExpiry = spans.map { it.arrivedAtMs + FOCUS_WINDOW_MS }.filter { it > now }.minOrNull()
+                ?: break
+            delay(nextExpiry - now)
             nowMs = System.currentTimeMillis()
-        }
-    }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(530)
-            cursorOn = !cursorOn
         }
     }
     val shown = buildAnnotatedString {
@@ -306,9 +318,6 @@ private fun FollowText(
             withStyle(SpanStyle(color = if (piece.focused) Ink else FocusDim)) {
                 append(piece.text)
             }
-        }
-        withStyle(SpanStyle(color = if (cursorOn) Ink else Color.Transparent)) {
-            append("▍")
         }
     }
     Text(

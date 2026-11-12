@@ -23,7 +23,7 @@ class HistoryExportTest {
             ),
         )
         assertTrue(text.startsWith("軟件開發\n"))
-        assertTrue(text.contains("English → Chinese"))
+        assertTrue(text.contains("English → Cantonese"))
         assertTrue(text.contains("Hello world."))
         assertTrue(text.contains("這是測試"))
     }
