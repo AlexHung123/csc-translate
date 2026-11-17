@@ -23,17 +23,23 @@ private const val PREROLL = (0.4 * RATE).toInt()
 /** Matches qwen-asr-demo-streaming's CHUNK_MS = 500. */
 private const val VOLATILE = (0.5 * RATE).toInt()
 private const val GAP = RATE
+/** After a completed sentence, a breath shorter than this stays in the same stream. */
+private const val ENDED_GAP = (0.35 * RATE).toInt()
 private const val LONGEST = 15 * RATE
 private const val TAIL_WAIT = (0.6 * RATE).toInt()
 private const val DRAFT_GAP_MS = 600L
 private const val TRANSLATION_QUEUE = 64
+private const val ASR_CONTEXT_LIMIT = 80
+private const val ASR_FAILS = 5
 
 /**
  * The phone's ASR + translate path. It hears 16 kHz PCM, cuts speech the way Tomoru's Qwen3-ASR
  * stretch runner does, and pushes only the samples not yet sent to [decode]. A true second
- * argument finishes that utterance. [translate] runs for each locked line. A partial shows only
- * what two decodes share. A sentence stays once shown. The unfinished tail of a final waits
- * 0.6 s, and joins the next stretch if the speaker goes on.
+ * argument finishes that utterance. [translate] runs for each locked line. Each partial is shown
+ * in full; the last few pieces stay unfixed. A sentence stays once shown. A new stream may carry
+ * the recent caption as context. A sentence with speech after it still waits 0.35 s of quiet
+ * before the stream ends, so a breath does not split one utterance. The unfinished tail of a
+ * final waits 0.6 s, and joins the next stretch if the speaker goes on.
  *
  * Finished lines wait in a queue of [translationQueue] and are translated one at a time, as
  * Tomoru's live session does. A line that does not fit is left untranslated. The draft of a line
@@ -44,7 +50,7 @@ internal class StretchSession(
     parent: CoroutineScope,
     private val srcLang: String,
     private val tgtLang: String,
-    private val decode: suspend (pcm: ByteArray, finish: Boolean) -> String,
+    private val decode: suspend (pcm: ByteArray, finish: Boolean, context: String) -> String,
     private val translate: suspend (text: String, draft: Boolean) -> String,
     private val release: () -> Unit = {},
     floor: Double = 0.02,
@@ -76,6 +82,7 @@ internal class StretchSession(
     private var decodedAt = 0
     private var generation = 0
     private var pendingDecode: Pending? = null
+    private var asrFails = 0
 
     private val hypothesis = Hypothesis()
     private val lines = mutableListOf<Line>()
@@ -148,14 +155,14 @@ internal class StretchSession(
                 }
             }
             val req = takePending()
-            if (req != null) apply(req, decodeLogged(req))
+            if (req != null) applyDecoded(req)
             val tail = takeQuiet()
             if (tail.isNotEmpty()) publish(tail)
             if (stop) {
                 val partial = takePending()
-                if (partial != null) apply(partial, decodeLogged(partial))
+                if (partial != null) applyDecoded(partial)
                 val last = finalNow()
-                if (last != null) apply(last, decodeLogged(last))
+                if (last != null) applyDecoded(last)
                 val flushed = lockTail()
                 if (flushed.isNotEmpty()) publish(flushed)
                 sync?.complete(Unit)
@@ -167,13 +174,33 @@ internal class StretchSession(
         }
     }
 
-    private suspend fun callDecode(pcm: ByteArray, finish: Boolean): String =
-        withContext(Dispatchers.IO) { decode(pcm, finish) }
+    private suspend fun callDecode(pcm: ByteArray, finish: Boolean, context: String): String =
+        withContext(Dispatchers.IO) { decode(pcm, finish, context) }
+
+    private fun asrContext(): String = synchronized(lock) {
+        source().replace("\n", "").takeLast(ASR_CONTEXT_LIMIT)
+    }
+
+    private suspend fun applyDecoded(req: Pending) {
+        val text = try {
+            decodeLogged(req)
+        } catch (t: CancellationException) {
+            throw t
+        } catch (t: Throwable) {
+            asrFails++
+            trace("asr fail $asrFails ${t.message.orEmpty().take(80)}")
+            if (asrFails >= ASR_FAILS) throw t
+            hypothesis.salvageUnfixed()
+            return
+        }
+        asrFails = 0
+        apply(req, text)
+    }
 
     private suspend fun decodeLogged(req: Pending): String {
         val seconds = req.pcm.size / 2f / RATE
         val started = System.nanoTime()
-        val text = callDecode(req.pcm, req.final)
+        val text = callDecode(req.pcm, req.final, asrContext())
         val ms = (System.nanoTime() - started) / 1_000_000
         trace(
             "asr ${if (req.final) "final" else "partial"} ${"%.1f".format(seconds)}s ${ms}ms ${text.take(120)}",
@@ -204,7 +231,11 @@ internal class StretchSession(
     private fun speaking(): Boolean {
         if (!heardVoice) return false
         if (voiceOn) return open || stepped >= onAt + MIN_SPEECH
-        val gap = if (open && (ended || stepped - start >= LONGEST)) 0 else GAP
+        val gap = when {
+            open && ended -> ENDED_GAP
+            open && stepped - start >= LONGEST -> 0
+            else -> GAP
+        }
         return open && stepped < offAt + gap
     }
 
@@ -302,14 +333,21 @@ internal class StretchSession(
             val quiet = heardVoice && !voiceOn && stepped >= offAt + TAIL_WAIT
             hypothesis.absorb(text, req.alignPrefix, final = true, quiet = quiet)
         } else {
-            val agreed = hypothesis.settle(text)
-            if (splitHypothesis(agreed).first.isNotEmpty()) ended = true
-            hypothesis.absorb(
-                stripVolatileEnd(agreed),
-                hypothesis.alignPrefix,
-                final = false,
-                quiet = false,
-            )
+            val shown = stripVolatileEnd(hypothesis.settle(text))
+            if (hypothesis.provisional) {
+                hypothesis.preview(shown)
+                emptyList()
+            } else {
+                if (splitHypothesis(hypothesis.stable).first.isNotEmpty()) ended = true
+                val newly = hypothesis.absorb(
+                    stripVolatileEnd(hypothesis.stable),
+                    hypothesis.alignPrefix,
+                    final = false,
+                    quiet = false,
+                )
+                hypothesis.preview(shown)
+                newly
+            }
         }
         if (newly.isNotEmpty()) trace("lock ${newly.joinToString("|").take(80)}")
         publish(newly)

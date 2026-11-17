@@ -596,7 +596,7 @@ class LiveSessionController(
             parent = scope,
             srcLang = src,
             tgtLang = tgt,
-            decode = { pcm, finish -> recognizer.transcribe(pcm, finish) },
+            decode = { pcm, finish, context -> recognizer.transcribe(pcm, finish, context) },
             translate = { text, draft -> translator.translate(text, draft) },
             release = { recognizer.close() },
             voice = voice,

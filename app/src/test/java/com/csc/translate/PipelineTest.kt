@@ -13,6 +13,7 @@ import com.csc.translate.pipeline.pcm16ToFloat32
 import com.csc.translate.pipeline.splitHypothesis
 import com.csc.translate.pipeline.streamCall
 import com.csc.translate.pipeline.streamSessionId
+import com.csc.translate.pipeline.streamStart
 import com.csc.translate.pipeline.streamText
 import com.csc.translate.pipeline.stripVolatileEnd
 import kotlinx.coroutines.CompletableDeferred
@@ -23,8 +24,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.charset.StandardCharsets
 import java.util.Collections
 import kotlin.math.sin
 
@@ -65,27 +68,47 @@ class PipelineTest {
     }
 
     @Test
-    fun twoDecodesAgreeBeforeThePrefixChanges() {
+    fun theLatestDecodeShowsAndTheUnfixedTailCanChange() {
         val h = Hypothesis()
-        assertEquals("", h.settle("你好世界"))
+        assertEquals("", h.settle(""))
         assertEquals("你好世界", h.settle("你好世界"))
-        assertEquals("你好世界", h.settle("您好世界呀"))
+        assertTrue(h.provisional)
+        assertEquals("", h.stable)
         assertEquals("您好世界呀", h.settle("您好世界呀"))
+        assertTrue(h.provisional)
+        assertEquals("一二三四五六七八", h.settle("一二三四五六七八"))
+        assertFalse(h.provisional)
+        assertEquals("一二三", h.stable)
+    }
+
+    @Test
+    fun aProvisionalPartialDoesNotLockASentence() {
+        val h = Hypothesis()
+        val first = stripVolatileEnd(h.settle("你好。我是"))
+        assertTrue(h.provisional)
+        h.preview(first)
+        assertEquals("你好。我是", h.pending)
+        val shown = stripVolatileEnd(h.settle("你好。我是小明啊今天"))
+        assertFalse(h.provisional)
+        val locked = h.absorb(stripVolatileEnd(h.stable), h.alignPrefix, final = false, quiet = false)
+        h.preview(shown)
+        assertEquals(listOf("你好。"), locked)
+        assertTrue(h.pending, h.pending.contains("我是"))
     }
 
     @Test
     fun aSentenceLocksAndALaterDecodeKeepsIt() {
         val h = Hypothesis()
-        h.settle("你好。我是")
-        val agreed = h.settle("你好。我是")
-        val locked = h.absorb(stripVolatileEnd(agreed), h.alignPrefix, final = false, quiet = false)
+        val shown = stripVolatileEnd(h.settle("你好。我是小明啊今天"))
+        val locked = h.absorb(stripVolatileEnd(h.stable), h.alignPrefix, final = false, quiet = false)
+        h.preview(shown)
         assertEquals(listOf("你好。"), locked)
-        assertEquals("我是", h.pending)
-        h.settle("你好。我是小明")
-        val grown = stripVolatileEnd(h.settle("你好。我是小明啊"))
-        val more = h.absorb(grown, h.alignPrefix, final = false, quiet = false)
+        assertTrue(h.pending, h.pending.contains("我是"))
+        val grown = stripVolatileEnd(h.settle("你好。我是小明啊今天呀"))
+        val more = h.absorb(stripVolatileEnd(h.stable), h.alignPrefix, final = false, quiet = false)
+        h.preview(grown)
         assertEquals(emptyList<String>(), more)
-        assertEquals("我是小明", h.pending)
+        assertTrue(h.pending, h.pending.contains("我是小明"))
         assertEquals(3, alignEnd("你好。", "你好。我是小明"))
     }
 
@@ -101,20 +124,20 @@ class PipelineTest {
     @Test
     fun aFinalTailWaitsThenJoinsTheNextStretch() {
         val h = Hypothesis()
-        h.settle("你好。今天")
-        val agreed = stripVolatileEnd(h.settle("你好。今天"))
-        h.absorb(agreed, h.alignPrefix, final = false, quiet = false)
-        val fin = h.absorb("你好。今天", h.alignPrefix, final = true, quiet = false)
+        val shown = stripVolatileEnd(h.settle("你好。今天天气真好"))
+        h.absorb(stripVolatileEnd(h.stable), h.alignPrefix, final = false, quiet = false)
+        h.preview(shown)
+        val fin = h.absorb("你好。今天天气真好", h.alignPrefix, final = true, quiet = false)
         assertEquals(emptyList<String>(), fin)
-        assertEquals("今天", h.pending)
+        assertTrue(h.pending, h.pending.contains("今天"))
         h.resetStretch()
-        h.settle("天气")
-        val joined = h.absorb(stripVolatileEnd(h.settle("天气")), h.alignPrefix, final = false, quiet = false)
-        assertEquals(emptyList<String>(), joined)
-        assertEquals("今天天气", h.pending)
+        h.preview(stripVolatileEnd(h.settle("天气")))
+        assertTrue(h.pending, h.pending.contains("今天天气"))
         val held = h.absorb("天气", h.alignPrefix, final = true, quiet = false)
         assertEquals(emptyList<String>(), held)
-        assertEquals(listOf("今天天气"), h.commitHeld())
+        val committed = h.commitHeld()
+        assertEquals(1, committed.size)
+        assertTrue(committed.toString(), committed.first().contains("今天天气"))
         assertEquals("", h.pending)
     }
 
@@ -126,9 +149,9 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = { _, _ ->
+            decode = { _, _, _ ->
                 n += 1
-                if (n <= 3) "你好。今天" else "天气"
+                if (n <= 3) "你好。今天天气真好" else "你好。今天天气真好天气"
             },
             translate = { text, draft ->
                 if (!draft) finals += text
@@ -152,15 +175,39 @@ class PipelineTest {
         session.write(sinePcm(9_000))
         session.awaitIdle()
         val src = session.snapshot().first
-        assertTrue(src, src.contains("今天天气"))
-        assertFalse(finals.toString(), "今天" in finals)
+        assertTrue(src, src.contains("今天") && src.contains("天气"))
+        assertFalse(finals.toString(), "今天天气" in finals)
 
         // Voice-off is a few frames after the samples start, and the runner steps by whole frames.
         // One second of zeros ends short of the 1 s gap, so the tail stays pending.
         session.write(ByteArray(32_000 * 2))
         session.awaitIdle()
-        withTimeout(5_000) { while ("今天天气" !in finals) delay(10) }
+        withTimeout(5_000) { while (finals.none { "今天天气" in it }) delay(10) }
         assertFalse(finals.toString(), "今天" in finals)
+        session.stop()
+    }
+
+    @Test
+    fun aPeriodNeedsAShortPauseBeforeTheStretchEnds() = runBlocking {
+        var finishes = 0
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            decode = { _, finish, _ ->
+                if (finish) finishes += 1
+                "你好。我是小明啊今天"
+            },
+            translate = { _, _ -> "t" },
+        )
+        session.write(sinePcm(24_000))
+        session.awaitIdle()
+        session.write(ByteArray(2_000 * 2))
+        session.awaitIdle()
+        assertEquals(0, finishes)
+        session.write(ByteArray(12_000 * 2))
+        session.awaitIdle()
+        assertTrue(finishes >= 1)
         session.stop()
     }
 
@@ -170,7 +217,7 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = { _, _ -> "你好。" },
+            decode = { _, _, _ -> "你好。" },
             translate = { _, _ -> "Hello." },
         )
         session.write(sinePcm(16_000))
@@ -190,7 +237,7 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = { _, _ -> "一一一一。二二二二。三三三三。還有尾" },
+            decode = { _, _, _ -> "一一一一。二二二二。三三三三。還有尾巴啊" },
             translate = { text, draft ->
                 if (!draft) {
                     entered += text
@@ -224,7 +271,7 @@ class PipelineTest {
             srcLang = "zh",
             tgtLang = "en",
             translationQueue = 1,
-            decode = { _, _ -> "一一一一。二二二二。三三三三。還有尾" },
+            decode = { _, _, _ -> "一一一一。二二二二。三三三三。還有尾巴啊今天" },
             translate = { text, draft ->
                 if (!draft) {
                     entered += text
@@ -260,7 +307,7 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = { _, _ -> if (punctuate) "你好世界。還有" else "你好世界" },
+            decode = { _, _, _ -> if (punctuate) "你好世界。還有尾巴啊今天" else "你好世界" },
             translate = { _, draft ->
                 if (draft) {
                     "草稿"
@@ -301,7 +348,7 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = { pcm, _ ->
+            decode = { pcm, _, _ ->
                 sizes += pcm.size
                 "甲"
             },
@@ -314,6 +361,60 @@ class PipelineTest {
         assertTrue(sizes.toString(), sizes.size >= 2)
         assertTrue(sizes.toString(), sizes.sum() <= 16_000 * 2 * 2)
         session.stop()
+    }
+
+    @Test
+    fun aFailedPartialKeepsTheSessionAlive() = runBlocking {
+        var n = 0
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            decode = { _, _, _ ->
+                n += 1
+                if (n == 1) error("boom")
+                "你好世界今天天气"
+            },
+            translate = { _, _ -> "t" },
+        )
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        assertTrue(session.snapshot().first, session.snapshot().first.contains("你好"))
+        session.stop()
+    }
+
+    @Test
+    fun aLaterStreamReceivesLockedTextAsContext() = runBlocking {
+        val contexts = Collections.synchronizedList(mutableListOf<String>())
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            decode = { _, _, context ->
+                contexts += context
+                "一一一一。二二二二。三三三三。還有尾巴啊"
+            },
+            translate = { _, _ -> "t" },
+        )
+        session.write(sinePcm(24_000))
+        session.awaitIdle()
+        session.write(ByteArray(32_000 * 2))
+        session.awaitIdle()
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        assertTrue(contexts.toString(), contexts.any { it.contains("一一一一") })
+        session.stop()
+    }
+
+    @Test
+    fun salvageKeepsTheCaptionWhenTheStreamDrops() {
+        val h = Hypothesis()
+        h.preview(stripVolatileEnd(h.settle("你好世界今天")))
+        h.salvageUnfixed()
+        h.preview(stripVolatileEnd(h.settle("天气")))
+        assertTrue(h.pending, h.pending.contains("你好世界今天天气"))
     }
 
     @Test
@@ -337,6 +438,12 @@ class PipelineTest {
         assertEquals(
             "http://192.168.1.241:8000/api/chunk?session_id=abc",
             streamCall("http://192.168.1.241:8000", "api/chunk", "abc"),
+        )
+        assertEquals("http://192.168.1.241:8000/api/start", streamStart("http://192.168.1.241:8000", "  "))
+        assertEquals(
+            "http://192.168.1.241:8000/api/start?context=" +
+                URLEncoder.encode("你好。今天", StandardCharsets.UTF_8.name()),
+            streamStart("http://192.168.1.241:8000", "你好。今天"),
         )
     }
 }

@@ -1,41 +1,64 @@
 package com.csc.translate.pipeline
 
+/** Trailing pieces the streaming server may still rewrite (`unfixed_token_num`). */
+internal const val UNFIXED_PIECES = 5
+
 /**
- * What a stretch's decodes may change on screen. A partial shows only the prefix two decodes in a
- * row share, and never a shorter one. A sentence, or a two-line cut, stays as it was first shown.
- * The unfinished tail of a final waits, and the next stretch's words append to it.
+ * What a stretch's decodes may change on screen. Each partial is shown in full. The last
+ * [UNFIXED_PIECES] pieces stay unfixed and may change, including the first character. A sentence
+ * locks only once it sits entirely before that tail. A sentence, or a two-line cut, stays as it
+ * was first shown. The unfinished tail of a final waits, and the next stretch's words append to it.
  */
 internal class Hypothesis {
     private var prefix = ""
     private var held = ""
-    private var last: List<String>? = null
     private var agreed = emptyList<String>()
     var pending: String = ""
         private set
 
+    /** True while nothing has left the unfixed tail, so a sentence must not lock yet. */
+    var provisional: Boolean = false
+        private set
+
     val alignPrefix: String get() = prefix
+
+    /** The prefix a sentence may lock from; the unfixed tail is excluded. */
+    val stable: String get() = agreed.joinToString("")
 
     fun hasTail(): Boolean = held.any { it.isLetterOrDigit() }
 
     /** The next stretch's audio does not repeat this one's words. The held tail still does. */
     fun resetStretch() {
-        last = null
         agreed = emptyList()
         prefix = ""
+        provisional = false
     }
 
-    /** Empty until a second decode exists. The newest unmatched word waits for the one after. */
+    /**
+     * Keep the unfinished caption if the streaming session is dropped mid-stretch, so the next
+     * decode's words append instead of replacing it.
+     */
+    fun salvageUnfixed() {
+        val rest = pending.trim()
+        resetStretch()
+        held = rest
+        pending = rest
+    }
+
+    /**
+     * Show the latest decode in full. [stable] is that text without the last [UNFIXED_PIECES]
+     * pieces, which the server may still rewrite.
+     */
     fun settle(text: String): String {
         val cur = textPieces(text)
-        val prev = last
-        if (prev != null) {
-            var n = 0
-            val limit = minOf(prev.size, cur.size)
-            while (n < limit && prev[n] == cur[n]) n++
-            if (n >= agreed.size) agreed = cur.take(n)
-        }
-        last = cur
-        return agreed.joinToString("")
+        agreed = if (cur.size <= UNFIXED_PIECES) emptyList() else cur.dropLast(UNFIXED_PIECES)
+        provisional = agreed.isEmpty() && cur.isNotEmpty()
+        return cur.joinToString("")
+    }
+
+    /** Show [text] without locking a sentence. A carried tail stays in front of it. */
+    fun preview(text: String) {
+        pending = (held + alignedTail(prefix, text)).trim()
     }
 
     /**

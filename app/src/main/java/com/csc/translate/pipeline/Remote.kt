@@ -40,6 +40,8 @@ fun probeAsr(client: OkHttpClient, baseUrl: String) {
  * The same three calls as qwen-asr-demo-streaming's browser client: empty POST /api/start,
  * 16 kHz little-endian float32 to /api/chunk every ~500 ms, empty POST /api/finish.
  * [transcribe] is given only the samples not sent yet. A true [finish] ends that utterance.
+ * A new start may carry [context] as `?context=`, which Spark's demo must read into
+ * `init_streaming_state(context=...)`. One failed HTTP call is retried on a fresh session.
  */
 class QwenAsr(
     private val client: OkHttpClient,
@@ -48,29 +50,41 @@ class QwenAsr(
     private val lock = Any()
     private var sessionId: String? = null
 
-    fun transcribe(pcm: ByteArray, finish: Boolean): String = synchronized(lock) {
-        try {
-            if (sessionId == null) {
-                if (pcm.isEmpty()) return ""
-                open()
+    fun transcribe(pcm: ByteArray, finish: Boolean, context: String = ""): String = synchronized(lock) {
+        var last: Throwable? = null
+        repeat(2) {
+            try {
+                return push(pcm, finish, context)
+            } catch (t: Throwable) {
+                last = t
+                abandon()
             }
-            val pushed = if (pcm.isEmpty()) "" else postChunk(sessionId!!, pcm)
-            if (!finish) return pushed
-            val id = sessionId ?: return pushed
-            val done = postFinish(id)
-            sessionId = null
-            done.ifBlank { pushed }
-        } catch (t: Throwable) {
-            abandon()
-            throw t
         }
+        throw last ?: error("asr")
     }
 
     /** Drops the server session when the live recognizer stops mid-utterance. */
     fun close() = synchronized(lock) { abandon() }
 
-    private fun open() {
-        sessionId = streamSessionId(execute(client, emptyPost("api/start"), 15))
+    private fun push(pcm: ByteArray, finish: Boolean, context: String): String {
+        if (sessionId == null) {
+            if (pcm.isEmpty()) return ""
+            open(context)
+        }
+        val pushed = if (pcm.isEmpty()) "" else postChunk(sessionId!!, pcm)
+        if (!finish) return pushed
+        val id = sessionId ?: return pushed
+        val done = postFinish(id)
+        sessionId = null
+        return done.ifBlank { pushed }
+    }
+
+    private fun open(context: String) {
+        val request = Request.Builder()
+            .url(streamStart(baseUrl, context))
+            .post(ByteArray(0).toRequestBody(null))
+            .build()
+        sessionId = streamSessionId(execute(client, request, 15))
     }
 
     private fun postChunk(id: String, pcm: ByteArray): String {
@@ -175,6 +189,14 @@ private suspend fun awaitContent(client: OkHttpClient, request: Request, seconds
 internal fun streamCall(baseUrl: String, path: String, sessionId: String): String {
     val id = URLEncoder.encode(sessionId, StandardCharsets.UTF_8.name())
     return restUrl(baseUrl, path) + "?session_id=$id"
+}
+
+internal fun streamStart(baseUrl: String, context: String): String {
+    val base = restUrl(baseUrl, "api/start")
+    val trimmed = context.trim()
+    if (trimmed.isEmpty()) return base
+    val q = URLEncoder.encode(trimmed, StandardCharsets.UTF_8.name())
+    return "$base?context=$q"
 }
 
 internal fun streamSessionId(raw: String): String =
