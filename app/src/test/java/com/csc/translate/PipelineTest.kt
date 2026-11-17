@@ -9,7 +9,11 @@ import com.csc.translate.pipeline.Voice
 import com.csc.translate.pipeline.VoiceAt
 import com.csc.translate.pipeline.alignEnd
 import com.csc.translate.pipeline.asrAnswer
+import com.csc.translate.pipeline.pcm16ToFloat32
 import com.csc.translate.pipeline.splitHypothesis
+import com.csc.translate.pipeline.streamCall
+import com.csc.translate.pipeline.streamSessionId
+import com.csc.translate.pipeline.streamText
 import com.csc.translate.pipeline.stripVolatileEnd
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
@@ -122,7 +126,7 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = {
+            decode = { _, _ ->
                 n += 1
                 if (n <= 3) "你好。今天" else "天气"
             },
@@ -166,7 +170,7 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = { "你好。" },
+            decode = { _, _ -> "你好。" },
             translate = { _, _ -> "Hello." },
         )
         session.write(sinePcm(16_000))
@@ -186,7 +190,7 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = { "一一一一。二二二二。三三三三。還有尾" },
+            decode = { _, _ -> "一一一一。二二二二。三三三三。還有尾" },
             translate = { text, draft ->
                 if (!draft) {
                     entered += text
@@ -220,7 +224,7 @@ class PipelineTest {
             srcLang = "zh",
             tgtLang = "en",
             translationQueue = 1,
-            decode = { "一一一一。二二二二。三三三三。還有尾" },
+            decode = { _, _ -> "一一一一。二二二二。三三三三。還有尾" },
             translate = { text, draft ->
                 if (!draft) {
                     entered += text
@@ -256,7 +260,7 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = { if (punctuate) "你好世界。還有" else "你好世界" },
+            decode = { _, _ -> if (punctuate) "你好世界。還有" else "你好世界" },
             translate = { _, draft ->
                 if (draft) {
                     "草稿"
@@ -288,6 +292,52 @@ class PipelineTest {
         session.finish()
         assertTrue(session.snapshot().second, session.snapshot().second.contains("正式"))
         session.stop()
+    }
+
+    @Test
+    fun aStretchSendsOnlyAudioTheServerHasNotHeard() = runBlocking {
+        val sizes = Collections.synchronizedList(mutableListOf<Int>())
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            decode = { pcm, _ ->
+                sizes += pcm.size
+                "甲"
+            },
+            translate = { _, _ -> "t" },
+        )
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        assertTrue(sizes.toString(), sizes.size >= 2)
+        assertTrue(sizes.toString(), sizes.sum() <= 16_000 * 2 * 2)
+        session.stop()
+    }
+
+    @Test
+    fun pcm16BecomesUnitFloat32() {
+        val raw = ByteBuffer.allocate(6).order(ByteOrder.LITTLE_ENDIAN)
+            .putShort(0)
+            .putShort(16384)
+            .putShort(-32768)
+            .array()
+        val floats = ByteBuffer.wrap(pcm16ToFloat32(raw)).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(0f, floats.float, 1e-6f)
+        assertEquals(0.5f, floats.float, 1e-4f)
+        assertEquals(-1f, floats.float, 1e-4f)
+    }
+
+    @Test
+    fun streamResponsesExposeTheSessionAndTheText() {
+        assertEquals("abc", streamSessionId("""{"session_id":"abc"}"""))
+        assertEquals("你好", streamText("""{"language":"Cantonese","text":"你好"}"""))
+        assertEquals("", streamText("""{"text":"  "}"""))
+        assertEquals(
+            "http://192.168.1.241:8000/api/chunk?session_id=abc",
+            streamCall("http://192.168.1.241:8000", "api/chunk", "abc"),
+        )
     }
 }
 

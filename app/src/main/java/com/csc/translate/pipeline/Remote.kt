@@ -18,60 +18,82 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
-import java.util.Base64
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 private val json = Json { ignoreUnknownKeys = true }
 private val jsonType = "application/json".toMediaType()
+private val pcmType = "application/octet-stream".toMediaType()
 
-/** This vLLM keeps a system message and drops the assistant prefill llama-server uses. */
-private const val CANTONESE = "language Cantonese"
-
+/**
+ * The streaming server has no model list. Its front page answers once the model is loaded.
+ */
 fun probeAsr(client: OkHttpClient, baseUrl: String) {
-    val request = Request.Builder().url(restUrl(baseUrl, "v1/models")).get().build()
+    val request = Request.Builder().url(restUrl(baseUrl, "")).get().build()
     execute(client, request, 8)
 }
 
+/**
+ * The same three calls as qwen-asr-demo-streaming's browser client: empty POST /api/start,
+ * 16 kHz little-endian float32 to /api/chunk every ~500 ms, empty POST /api/finish.
+ * [transcribe] is given only the samples not sent yet. A true [finish] ends that utterance.
+ */
 class QwenAsr(
     private val client: OkHttpClient,
     private val baseUrl: String,
 ) {
-    fun transcribe(pcm: ByteArray): String {
-        val audio = buildJsonObject {
-            put("type", "input_audio")
-            put(
-                "input_audio",
-                buildJsonObject {
-                    put("data", Base64.getEncoder().encodeToString(wavBytes(pcm)))
-                    put("format", "wav")
-                },
-            )
+    private val lock = Any()
+    private var sessionId: String? = null
+
+    fun transcribe(pcm: ByteArray, finish: Boolean): String = synchronized(lock) {
+        try {
+            if (sessionId == null) {
+                if (pcm.isEmpty()) return ""
+                open()
+            }
+            val pushed = if (pcm.isEmpty()) "" else postChunk(sessionId!!, pcm)
+            if (!finish) return pushed
+            val id = sessionId ?: return pushed
+            val done = postFinish(id)
+            sessionId = null
+            done.ifBlank { pushed }
+        } catch (t: Throwable) {
+            abandon()
+            throw t
         }
-        val body = buildJsonObject {
-            put(
-                "messages",
-                buildJsonArray {
-                    add(buildJsonObject {
-                        put("role", "system")
-                        put("content", CANTONESE)
-                    })
-                    add(buildJsonObject {
-                        put("role", "user")
-                        put("content", buildJsonArray { add(audio) })
-                    })
-                },
-            )
-            put("temperature", 0)
-            put("max_tokens", 512)
-            put("cache_prompt", false)
-        }
+    }
+
+    /** Drops the server session when the live recognizer stops mid-utterance. */
+    fun close() = synchronized(lock) { abandon() }
+
+    private fun open() {
+        sessionId = streamSessionId(execute(client, emptyPost("api/start"), 15))
+    }
+
+    private fun postChunk(id: String, pcm: ByteArray): String {
         val request = Request.Builder()
-            .url(restUrl(baseUrl, "v1/chat/completions"))
-            .post(body.toString().toRequestBody(jsonType))
+            .url(streamCall(baseUrl, "api/chunk", id))
+            .post(pcm16ToFloat32(pcm).toRequestBody(pcmType))
             .build()
-        return asrAnswer(chatContent(client, request, 30))
+        return streamText(execute(client, request, 30))
+    }
+
+    private fun postFinish(id: String): String =
+        streamText(execute(client, emptyPost("api/finish", id), 30))
+
+    private fun emptyPost(path: String, id: String? = null): Request =
+        Request.Builder()
+            .url(if (id == null) restUrl(baseUrl, path) else streamCall(baseUrl, path, id))
+            .post(ByteArray(0).toRequestBody(null))
+            .build()
+
+    private fun abandon() {
+        val id = sessionId ?: return
+        sessionId = null
+        runCatching { postFinish(id) }
     }
 }
 
@@ -114,7 +136,10 @@ private fun execute(client: OkHttpClient, request: Request, seconds: Long): Stri
     call.timeout().timeout(seconds, TimeUnit.SECONDS)
     return call.execute().use { response ->
         val raw = response.body?.string().orEmpty()
-        if (!response.isSuccessful) error("HTTP ${response.code}")
+        if (!response.isSuccessful) {
+            val detail = raw.take(160).replace('\n', ' ').trim()
+            error(if (detail.isEmpty()) "HTTP ${response.code}" else "HTTP ${response.code} $detail")
+        }
         raw
     }
 }
@@ -146,6 +171,26 @@ private suspend fun awaitContent(client: OkHttpClient, request: Request, seconds
             }
         })
     }
+
+internal fun streamCall(baseUrl: String, path: String, sessionId: String): String {
+    val id = URLEncoder.encode(sessionId, StandardCharsets.UTF_8.name())
+    return restUrl(baseUrl, path) + "?session_id=$id"
+}
+
+internal fun streamSessionId(raw: String): String =
+    json.parseToJsonElement(raw).jsonObject["session_id"]
+        ?.jsonPrimitive
+        ?.contentOrNull
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?: error("no session")
+
+internal fun streamText(raw: String): String =
+    json.parseToJsonElement(raw).jsonObject["text"]
+        ?.jsonPrimitive
+        ?.contentOrNull
+        ?.trim()
+        .orEmpty()
 
 private fun messageContent(raw: String): String =
     json.parseToJsonElement(raw)

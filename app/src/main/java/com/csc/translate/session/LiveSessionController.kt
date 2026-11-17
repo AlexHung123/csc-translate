@@ -596,8 +596,9 @@ class LiveSessionController(
             parent = scope,
             srcLang = src,
             tgtLang = tgt,
-            decode = { recognizer.transcribe(it) },
+            decode = { pcm, finish -> recognizer.transcribe(pcm, finish) },
             translate = { text, draft -> translator.translate(text, draft) },
+            release = { recognizer.close() },
             voice = voice,
             onView = { source, target ->
                 scope.launch {
@@ -606,7 +607,8 @@ class LiveSessionController(
                     publishTranscript()
                 }
             },
-            onError = {
+            onError = { error ->
+                Log.w(TAG, "recognition failed", error)
                 scope.launch {
                     if (!sessionOpen.get()) return@launch
                     _messages.emit(app.getString(R.string.asr_fail))

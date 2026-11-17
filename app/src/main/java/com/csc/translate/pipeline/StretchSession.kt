@@ -20,6 +20,7 @@ import kotlin.math.max
 
 private const val MIN_SPEECH = (0.25 * RATE).toInt()
 private const val PREROLL = (0.4 * RATE).toInt()
+/** Matches qwen-asr-demo-streaming's CHUNK_MS = 500. */
 private const val VOLATILE = (0.5 * RATE).toInt()
 private const val GAP = RATE
 private const val LONGEST = 15 * RATE
@@ -29,9 +30,10 @@ private const val TRANSLATION_QUEUE = 64
 
 /**
  * The phone's ASR + translate path. It hears 16 kHz PCM, cuts speech the way Tomoru's Qwen3-ASR
- * stretch runner does, asks [decode] for the text, and [translate] for each line. A partial
- * shows only what two decodes share. A sentence stays once shown. The unfinished tail of a final
- * waits 0.6 s, and joins the next stretch if the speaker goes on.
+ * stretch runner does, and pushes only the samples not yet sent to [decode]. A true second
+ * argument finishes that utterance. [translate] runs for each locked line. A partial shows only
+ * what two decodes share. A sentence stays once shown. The unfinished tail of a final waits
+ * 0.6 s, and joins the next stretch if the speaker goes on.
  *
  * Finished lines wait in a queue of [translationQueue] and are translated one at a time, as
  * Tomoru's live session does. A line that does not fit is left untranslated. The draft of a line
@@ -42,8 +44,9 @@ internal class StretchSession(
     parent: CoroutineScope,
     private val srcLang: String,
     private val tgtLang: String,
-    private val decode: suspend (ByteArray) -> String,
+    private val decode: suspend (pcm: ByteArray, finish: Boolean) -> String,
     private val translate: suspend (text: String, draft: Boolean) -> String,
+    private val release: () -> Unit = {},
     floor: Double = 0.02,
     private val voice: Voice = Level(floor),
     private val onView: (src: String, tgt: String) -> Unit = { _, _ -> },
@@ -69,6 +72,7 @@ internal class StretchSession(
     private var open = false
     private var ended = false
     private var start = 0
+    private var sent = 0
     private var decodedAt = 0
     private var generation = 0
     private var pendingDecode: Pending? = null
@@ -91,6 +95,7 @@ internal class StretchSession(
         } catch (t: Throwable) {
             if (t !is CancellationException) onError(t)
         } finally {
+            runCatching { release() }
             finished.complete(Unit)
         }
     }
@@ -162,13 +167,13 @@ internal class StretchSession(
         }
     }
 
-    private suspend fun callDecode(pcm: ByteArray): String =
-        withContext(Dispatchers.IO) { decode(pcm) }
+    private suspend fun callDecode(pcm: ByteArray, finish: Boolean): String =
+        withContext(Dispatchers.IO) { decode(pcm, finish) }
 
     private suspend fun decodeLogged(req: Pending): String {
         val seconds = req.pcm.size / 2f / RATE
         val started = System.nanoTime()
-        val text = callDecode(req.pcm)
+        val text = callDecode(req.pcm, req.final)
         val ms = (System.nanoTime() - started) / 1_000_000
         trace(
             "asr ${if (req.final) "final" else "partial"} ${"%.1f".format(seconds)}s ${ms}ms ${text.take(120)}",
@@ -212,6 +217,7 @@ internal class StretchSession(
                 open = true
                 ended = false
                 start = max(base, onAt - PREROLL)
+                if (sent < start) sent = start
                 decodedAt = stepped
                 generation++
                 hypothesis.resetStretch()
@@ -221,6 +227,7 @@ internal class StretchSession(
                 trace("stretch cut ${"%.1f".format((stepped - start) / RATE.toFloat())}s")
                 queue(final = true, end = stepped)
                 start = stepped
+                if (sent < stepped) sent = stepped
                 decodedAt = stepped
                 ended = false
                 open = true
@@ -251,28 +258,27 @@ internal class StretchSession(
     }
 
     private fun queue(final: Boolean, end: Int) {
-        val audio = slice(start, end)
-        if (audio.isEmpty()) {
-            if (final) open = false
-            return
-        }
-        val req = Pending(audio, final, generation, hypothesis.alignPrefix)
+        val audio = slice(sent, end)
+        if (audio.isEmpty() && !final) return
+        val req = Pending(audio, final, generation, hypothesis.alignPrefix, end)
         val current = pendingDecode
         if (current == null || final || !current.final) pendingDecode = req
         if (final) open = false
     }
 
     private fun takePending(): Pending? {
-        val req = pendingDecode
+        val req = pendingDecode ?: return null
         pendingDecode = null
+        if (req.end > sent) sent = req.end
         return req
     }
 
     private fun finalNow(): Pending? {
         if (!open) return null
-        val req = Pending(slice(start, total), final = true, generation, hypothesis.alignPrefix)
+        val audio = slice(sent, total)
         open = false
-        return if (req.pcm.isEmpty()) null else req
+        if (total > sent) sent = total
+        return Pending(audio, final = true, generation, hypothesis.alignPrefix, total)
     }
 
     private fun takeQuiet(): List<String> {
@@ -511,6 +517,7 @@ private data class Pending(
     val final: Boolean,
     val generation: Int,
     val alignPrefix: String,
+    val end: Int,
 )
 
 private data class Work(val index: Int, val text: String, val draft: Boolean, val gen: Int)

@@ -17,6 +17,17 @@ internal fun pcmToFloat(pcm: ByteArray): FloatArray {
     return out
 }
 
+/** Little-endian float32 samples in [-1, 1]. The streaming server reads this, not 16-bit PCM. */
+internal fun pcm16ToFloat32(pcm: ByteArray): ByteArray {
+    val n = pcm.size / 2
+    val raw = ByteArray(n * 4)
+    if (n == 0) return raw
+    val src = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN)
+    val dst = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN)
+    for (i in 0 until n) dst.putFloat(src.getShort(i * 2) / 32768f)
+    return raw
+}
+
 internal fun resample16(pcm: ByteArray, from: Int): ByteArray {
     if (from == RATE || pcm.isEmpty()) return pcm
     if (from <= 0 || pcm.size % 2 != 0) return pcm
