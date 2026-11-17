@@ -29,9 +29,10 @@ private const val TRANSLATION_QUEUE = 64
 
 /**
  * The phone's ASR + translate path. It hears 16 kHz PCM, cuts speech the way Tomoru's Qwen3-ASR
- * stretch runner does, asks [decode] for the text, and [translate] for each line. A partial
- * shows only what two decodes share. A sentence stays once shown. The unfinished tail of a final
- * waits 0.6 s, and joins the next stretch if the speaker goes on.
+ * stretch runner does, asks [decode] for the text, and [translate] for each line. The first
+ * partial is shown at once; later partials show only what two decodes share. A sentence stays
+ * once shown. The unfinished tail of a final waits 0.6 s, and joins the next stretch if the
+ * speaker goes on.
  *
  * Finished lines wait in a queue of [translationQueue] and are translated one at a time, as
  * Tomoru's live session does. A line that does not fit is left untranslated. The draft of a line
@@ -89,7 +90,10 @@ internal class StretchSession(
         try {
             run()
         } catch (t: Throwable) {
-            if (t !is CancellationException) onError(t)
+            if (t !is CancellationException) {
+                traceFailure("session failed ${t.javaClass.simpleName}: ${t.message}", t)
+                onError(t)
+            }
         } finally {
             finished.complete(Unit)
         }
@@ -168,12 +172,22 @@ internal class StretchSession(
     private suspend fun decodeLogged(req: Pending): String {
         val seconds = req.pcm.size / 2f / RATE
         val started = System.nanoTime()
-        val text = callDecode(req.pcm)
-        val ms = (System.nanoTime() - started) / 1_000_000
-        trace(
-            "asr ${if (req.final) "final" else "partial"} ${"%.1f".format(seconds)}s ${ms}ms ${text.take(120)}",
-        )
-        return text
+        try {
+            val text = callDecode(req.pcm)
+            val ms = (System.nanoTime() - started) / 1_000_000
+            trace(
+                "asr ${if (req.final) "final" else "partial"} ${"%.1f".format(seconds)}s ${ms}ms ${text.take(120)}",
+            )
+            return text
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            val ms = (System.nanoTime() - started) / 1_000_000
+            trace(
+                "asr ${if (req.final) "final" else "partial"} ${"%.1f".format(seconds)}s ${ms}ms " +
+                    "failed ${t.javaClass.simpleName}: ${t.message}",
+            )
+            throw t
+        }
     }
 
     private fun feed(chunk: ByteArray) {
@@ -297,13 +311,14 @@ internal class StretchSession(
             hypothesis.absorb(text, req.alignPrefix, final = true, quiet = quiet)
         } else {
             val agreed = hypothesis.settle(text)
-            if (splitHypothesis(agreed).first.isNotEmpty()) ended = true
-            hypothesis.absorb(
-                stripVolatileEnd(agreed),
-                hypothesis.alignPrefix,
-                final = false,
-                quiet = false,
-            )
+            val shown = stripVolatileEnd(agreed)
+            if (hypothesis.provisional) {
+                hypothesis.preview(shown)
+                emptyList()
+            } else {
+                if (splitHypothesis(agreed).first.isNotEmpty()) ended = true
+                hypothesis.absorb(shown, hypothesis.alignPrefix, final = false, quiet = false)
+            }
         }
         if (newly.isNotEmpty()) trace("lock ${newly.joinToString("|").take(80)}")
         publish(newly)
@@ -533,6 +548,14 @@ private fun spaced(code: String): Boolean = code != "zh" && code != "yue" && cod
 private fun trace(message: String) {
     try {
         Log.i("CscAsr", message)
+    } catch (_: RuntimeException) {
+        // JVM unit tests ship an android.util.Log that throws.
+    }
+}
+
+private fun traceFailure(message: String, error: Throwable) {
+    try {
+        Log.w("CscAsr", message, error)
     } catch (_: RuntimeException) {
         // JVM unit tests ship an android.util.Log that throws.
     }

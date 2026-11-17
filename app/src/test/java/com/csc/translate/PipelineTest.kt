@@ -63,10 +63,35 @@ class PipelineTest {
     @Test
     fun twoDecodesAgreeBeforeThePrefixChanges() {
         val h = Hypothesis()
-        assertEquals("", h.settle("你好世界"))
+        assertEquals("你好世界", h.settle("你好世界"))
         assertEquals("你好世界", h.settle("你好世界"))
         assertEquals("你好世界", h.settle("您好世界呀"))
         assertEquals("您好世界呀", h.settle("您好世界呀"))
+    }
+
+    @Test
+    fun theFirstDecodeShowsAndANewTailWaits() {
+        val h = Hypothesis()
+        assertEquals("", h.settle(""))
+        assertEquals("你好世界", h.settle("你好世界"))
+        assertTrue(h.provisional)
+        assertEquals("你好世界", h.settle("你好世界今天"))
+        assertFalse(h.provisional)
+        assertEquals("你好世界今天", h.settle("你好世界今天呀"))
+    }
+
+    @Test
+    fun aProvisionalPartialDoesNotLockASentence() {
+        val h = Hypothesis()
+        val first = stripVolatileEnd(h.settle("你好。我是"))
+        assertTrue(h.provisional)
+        h.preview(first)
+        assertEquals("你好。我是", h.pending)
+        val second = stripVolatileEnd(h.settle("你好。我是"))
+        assertFalse(h.provisional)
+        val locked = h.absorb(second, h.alignPrefix, final = false, quiet = false)
+        assertEquals(listOf("你好。"), locked)
+        assertEquals("我是", h.pending)
     }
 
     @Test

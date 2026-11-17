@@ -1,9 +1,10 @@
 package com.csc.translate.pipeline
 
 /**
- * What a stretch's decodes may change on screen. A partial shows only the prefix two decodes in a
- * row share, and never a shorter one. A sentence, or a two-line cut, stays as it was first shown.
- * The unfinished tail of a final waits, and the next stretch's words append to it.
+ * What a stretch's decodes may change on screen. The first partial is shown at once and can still
+ * change. After that, a partial shows only the prefix two decodes in a row share, and never a
+ * shorter one. A sentence, or a two-line cut, stays as it was first shown. The unfinished tail of
+ * a final waits, and the next stretch's words append to it.
  */
 internal class Hypothesis {
     private var prefix = ""
@@ -11,6 +12,10 @@ internal class Hypothesis {
     private var last: List<String>? = null
     private var agreed = emptyList<String>()
     var pending: String = ""
+        private set
+
+    /** True while the shown text is only the first decode and a later one has not agreed with it. */
+    var provisional: Boolean = false
         private set
 
     val alignPrefix: String get() = prefix
@@ -22,20 +27,36 @@ internal class Hypothesis {
         last = null
         agreed = emptyList()
         prefix = ""
+        provisional = false
     }
 
-    /** Empty until a second decode exists. The newest unmatched word waits for the one after. */
+    /**
+     * The first decode is shown immediately. After that, only a shared prefix that is not shorter
+     * can grow, and the newest unmatched word waits for the one after.
+     */
     fun settle(text: String): String {
         val cur = textPieces(text)
         val prev = last
-        if (prev != null) {
-            var n = 0
-            val limit = minOf(prev.size, cur.size)
-            while (n < limit && prev[n] == cur[n]) n++
-            if (n >= agreed.size) agreed = cur.take(n)
+        if (prev == null || agreed.isEmpty()) {
+            last = cur
+            agreed = cur
+            provisional = cur.isNotEmpty()
+            return agreed.joinToString("")
+        }
+        var n = 0
+        val limit = minOf(prev.size, cur.size)
+        while (n < limit && prev[n] == cur[n]) n++
+        if (n >= agreed.size) {
+            agreed = cur.take(n)
+            provisional = false
         }
         last = cur
         return agreed.joinToString("")
+    }
+
+    /** Show [text] without locking a sentence. A carried tail stays in front of it. */
+    fun preview(text: String) {
+        pending = (held + alignedTail(prefix, text)).trim()
     }
 
     /**

@@ -68,7 +68,10 @@ class PlaybackRecorder(
                 when {
                     n > 0 -> filled += n
                     n == AudioRecord.ERROR_DEAD_OBJECT || n == AudioRecord.ERROR_INVALID_OPERATION -> {
-                        if (running) onError("stopped")
+                        if (running) {
+                            Log.w(TAG, "playback read stopped code=$n")
+                            onError("stopped")
+                        }
                         running = false
                         return
                     }

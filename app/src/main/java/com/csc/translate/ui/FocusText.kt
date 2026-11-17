@@ -3,6 +3,12 @@ package com.csc.translate.ui
 internal const val FOCUS_WINDOW_MS = 10_000L
 internal const val ENGLISH_SETTLE_MS = 500L
 
+/** The first character waits this long, once, before the queue starts playing. */
+internal const val STREAM_PREROLL_MS = 5_000L
+internal const val CJK_STREAM_MS = 150L
+internal const val LETTER_STREAM_MS = 40L
+internal const val SPACE_STREAM_MS = 20L
+
 internal data class FollowCursor(
     val spans: List<FocusSpan>,
     val revealed: Int,
@@ -73,37 +79,37 @@ internal fun focusPieces(
 }
 
 /**
- * Moves the typewriter the way the watch page does. English keeps the cursor where it is,
- * so a revised line replaces text already on screen. Other languages retype from the edit.
+ * The first text starts unrevealed. A revision keeps the cursor where it is, so a character
+ * already on screen changes in place. The unrevealed tail is replaced in the queue.
  */
 internal fun followCursor(
     spans: List<FocusSpan>,
     revealed: Int,
     primed: Boolean,
     next: String,
-    english: Boolean,
     nowMs: Long,
 ): FollowCursor {
     if (!primed) {
         return FollowCursor(
             spans = if (next.isEmpty()) emptyList() else listOf(FocusSpan(next, nowMs)),
-            revealed = next.length,
+            revealed = 0,
             primed = true,
         )
     }
     val previous = spans.joinToString("") { it.text }
     if (next == previous) return FollowCursor(spans, revealed, primed)
-    val prefix = commonPrefixLength(previous, next)
-    val shown = if (english) {
-        minOf(revealed, next.length)
-    } else {
-        var cursor = revealed
-        if (prefix < cursor) cursor = prefix
-        if (cursor > next.length) cursor = next.length
-        cursor
-    }
-    return FollowCursor(integrateSpans(spans, next, nowMs), shown, primed)
+    return FollowCursor(integrateSpans(spans, next, nowMs), minOf(revealed, next.length), primed)
 }
+
+/** Arms the one-time preroll when the first character arrives. A later call keeps the same instant. */
+internal fun streamReleaseAt(releaseAtMs: Long, nowMs: Long, hasText: Boolean): Long {
+    if (releaseAtMs != 0L) return releaseAtMs
+    if (!hasText) return 0L
+    return nowMs + STREAM_PREROLL_MS
+}
+
+internal fun streamReady(releaseAtMs: Long, nowMs: Long): Boolean =
+    releaseAtMs != 0L && nowMs >= releaseAtMs
 
 /** English types only a span that has sat unchanged for [ENGLISH_SETTLE_MS]. */
 internal fun stableEnd(
@@ -138,38 +144,29 @@ internal fun settleWaitMs(
     return settleMs
 }
 
-internal fun typeDelayMs(char: Char, backlog: Int, english: Boolean = false): Long {
-    val base = when {
-        char.isWhitespace() -> 10L
-        char.code < 128 -> 16L
-        else -> 32L
-    }
-    if (english) return base
-    val paced = when {
-        backlog > 48 -> 4L
-        backlog > 24 -> base / 2
-        else -> base
-    }
-    return paced.coerceAtLeast(4L)
+/** The unrevealed suffix is the stream queue. */
+internal fun queuedText(text: String, revealed: Int): String {
+    if (revealed >= text.length) return ""
+    return text.substring(revealed.coerceAtLeast(0))
 }
 
-/** How far the cursor moves after [elapsedMs] on the clock, independent of layout. */
+/** Han and other non-ASCII characters take [CJK_STREAM_MS]. ASCII letters take [LETTER_STREAM_MS]. */
+internal fun typeDelayMs(char: Char): Long = when {
+    char.isWhitespace() -> SPACE_STREAM_MS
+    char.code < 128 -> LETTER_STREAM_MS
+    else -> CJK_STREAM_MS
+}
+
+/** Releases one queued character once [elapsedMs] covers that character. A late frame does not catch up. */
 internal fun advanceRevealed(
     revealed: Int,
     text: String,
     limit: Int,
     elapsedMs: Long,
-    english: Boolean,
 ): Int {
-    var cursor = revealed
-    var budget = elapsedMs
-    while (cursor < limit && cursor < text.length && budget > 0) {
-        val cost = typeDelayMs(text[cursor], text.length - cursor, english)
-        if (budget < cost) break
-        budget -= cost
-        cursor += 1
-    }
-    return cursor
+    if (revealed >= limit || revealed >= text.length) return revealed
+    if (elapsedMs < typeDelayMs(text[revealed])) return revealed
+    return revealed + 1
 }
 
 internal fun commonPrefixLength(left: String, right: String): Int {

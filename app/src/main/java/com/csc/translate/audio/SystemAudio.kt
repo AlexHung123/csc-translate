@@ -44,6 +44,7 @@ object SystemAudio {
                 if (!gate.isCompleted) gate.complete(null)
                 onRevoked
             }
+            Log.w(TAG, "media projection stopped")
             stopping = false
             listener?.invoke()
         }

@@ -114,9 +114,14 @@ private fun execute(client: OkHttpClient, request: Request, seconds: Long): Stri
     call.timeout().timeout(seconds, TimeUnit.SECONDS)
     return call.execute().use { response ->
         val raw = response.body?.string().orEmpty()
-        if (!response.isSuccessful) error("HTTP ${response.code}")
+        if (!response.isSuccessful) failHttp(response.code, request, raw)
         raw
     }
+}
+
+private fun failHttp(code: Int, request: Request, raw: String): Nothing {
+    val detail = raw.take(160).replace('\n', ' ')
+    error("HTTP $code ${request.url.encodedPath} $detail")
 }
 
 private fun chatContent(client: OkHttpClient, request: Request, seconds: Long): String =
@@ -137,7 +142,7 @@ private suspend fun awaitContent(client: OkHttpClient, request: Request, seconds
                 response.use {
                     try {
                         val raw = it.body?.string().orEmpty()
-                        if (!it.isSuccessful) error("HTTP ${it.code}")
+                        if (!it.isSuccessful) failHttp(it.code, request, raw)
                         if (cont.isActive) cont.resume(messageContent(raw))
                     } catch (t: Throwable) {
                         if (cont.isActive) cont.resumeWithException(t)

@@ -606,7 +606,8 @@ class LiveSessionController(
                     publishTranscript()
                 }
             },
-            onError = {
+            onError = { error ->
+                Log.w(TAG, "recognition failed: ${error.javaClass.simpleName}: ${error.message}")
                 scope.launch {
                     if (!sessionOpen.get()) return@launch
                     _messages.emit(app.getString(R.string.asr_fail))
@@ -655,7 +656,8 @@ class LiveSessionController(
         rec = PlaybackRecorder(
             projection = projection,
             onFrame = { frame -> deliver(frame, rec.sampleRate) },
-            onError = {
+            onError = { reason ->
+                Log.w(TAG, "system audio stopped: $reason")
                 scope.launch {
                     _messages.emit(app.getString(R.string.system_audio_stopped))
                     teardown(save = transcript.isEmpty.not())

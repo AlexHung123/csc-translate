@@ -272,25 +272,34 @@ private fun FollowText(
     LaunchedEffect(text, english) {
         val now = System.currentTimeMillis()
         nowMs = now
-        val cursor = followCursor(spans, revealed, primed, text, english, now)
+        val cursor = followCursor(spans, revealed, primed, text, now)
         spans = cursor.spans
         revealed = cursor.revealed
         primed = cursor.primed
     }
     // Keep running across new text. Restarting here cancelled the wait, so nothing was ever revealed.
+    // The first character waits STREAM_PREROLL_MS once. After that the queue plays at a fixed rate.
     // Scrolling waits for layout, so it stays out of this loop.
     LaunchedEffect(english) {
         var marked = System.currentTimeMillis()
+        var releaseAtMs = 0L
         while (true) {
             val full = spans.joinToString("") { it.text }
             val now = System.currentTimeMillis()
+            releaseAtMs = streamReleaseAt(releaseAtMs, now, full.isNotEmpty())
+            if (!streamReady(releaseAtMs, now)) {
+                val wait = if (releaseAtMs == 0L) 16L else (releaseAtMs - now).coerceAtLeast(16L)
+                delay(wait)
+                marked = System.currentTimeMillis()
+                continue
+            }
             if (revealed >= full.length || revealed >= stableEnd(spans, now, english)) {
                 val wait = if (revealed >= full.length) 16L else settleWaitMs(spans, revealed, now)
                 delay(wait)
                 marked = System.currentTimeMillis()
                 continue
             }
-            delay(typeDelayMs(full[revealed], full.length - revealed, english))
+            delay(typeDelayMs(full[revealed]))
             val after = System.currentTimeMillis()
             val latest = spans.joinToString("") { it.text }
             val next = advanceRevealed(
@@ -298,7 +307,6 @@ private fun FollowText(
                 latest,
                 stableEnd(spans, after, english),
                 after - marked,
-                english,
             )
             marked = after
             if (next == revealed) continue
