@@ -17,6 +17,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSource
 import java.io.IOException
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -118,7 +119,7 @@ class IndexTranslator(
     private val baseUrl: String,
     private val model: String,
 ) {
-    suspend fun translate(text: String, draft: Boolean): String {
+    suspend fun translate(text: String, onPartial: (String) -> Unit = {}): String {
         val body = buildJsonObject {
             put("model", model)
             put(
@@ -126,11 +127,11 @@ class IndexTranslator(
                 buildJsonArray {
                     add(buildJsonObject {
                         put("role", "user")
-                        put("content", indexPrompt(src, tgt, text, draft))
+                        put("content", indexPrompt(src, tgt, text))
                     })
                 },
             )
-            put("stream", false)
+            put("stream", true)
             put("temperature", 0)
             put("max_tokens", 128 + text.length)
             put("cache_prompt", true)
@@ -141,7 +142,7 @@ class IndexTranslator(
             .header("User-Agent", "Index-Translate-Client/1.0")
             .post(body.toString().toRequestBody(jsonType))
             .build()
-        return awaitContent(client, request, 20)
+        return awaitStream(client, request, 20, onPartial)
     }
 }
 
@@ -158,33 +159,77 @@ private fun execute(client: OkHttpClient, request: Request, seconds: Long): Stri
     }
 }
 
-private fun chatContent(client: OkHttpClient, request: Request, seconds: Long): String =
-    messageContent(execute(client, request, seconds))
+/** Cancelling the coroutine cancels the HTTP call. */
+private suspend fun awaitStream(
+    client: OkHttpClient,
+    request: Request,
+    seconds: Long,
+    onPartial: (String) -> Unit,
+): String = suspendCancellableCoroutine { cont ->
+    val call = client.newCall(request)
+    call.timeout().timeout(seconds, TimeUnit.SECONDS)
+    cont.invokeOnCancellation { call.cancel() }
+    call.enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (cont.isActive) cont.resumeWithException(e)
+        }
 
-/** Cancelling the coroutine cancels the HTTP call, so a dropped draft does not keep the model busy. */
-private suspend fun awaitContent(client: OkHttpClient, request: Request, seconds: Long): String =
-    suspendCancellableCoroutine { cont ->
-        val call = client.newCall(request)
-        call.timeout().timeout(seconds, TimeUnit.SECONDS)
-        cont.invokeOnCancellation { call.cancel() }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (cont.isActive) cont.resumeWithException(e)
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                response.use {
-                    try {
-                        val raw = it.body?.string().orEmpty()
-                        if (!it.isSuccessful) error("HTTP ${it.code}")
-                        if (cont.isActive) cont.resume(messageContent(raw))
-                    } catch (t: Throwable) {
-                        if (cont.isActive) cont.resumeWithException(t)
+        override fun onResponse(call: Call, response: Response) {
+            response.use {
+                try {
+                    if (!it.isSuccessful) {
+                        val detail = it.body?.string().orEmpty().take(160).replace('\n', ' ').trim()
+                        error(if (detail.isEmpty()) "HTTP ${it.code}" else "HTTP ${it.code} $detail")
                     }
+                    val source = it.body?.source() ?: error("HTTP ${it.code}")
+                    val text = readChatStream(source, onPartial)
+                    if (cont.isActive) cont.resume(text)
+                } catch (t: Throwable) {
+                    if (cont.isActive) cont.resumeWithException(t)
                 }
             }
-        })
+        }
+    })
+}
+
+internal fun readChatStream(source: BufferedSource, onPartial: (String) -> Unit): String {
+    val out = StringBuilder()
+    var sawEvent = false
+    val leftover = StringBuilder()
+    while (!source.exhausted()) {
+        val line = source.readUtf8Line() ?: break
+        val data = when {
+            line.startsWith("data: ") -> line.substring(6)
+            line.startsWith("data:") -> line.substring(5).trimStart()
+            else -> {
+                if (line.isNotBlank()) leftover.append(line)
+                continue
+            }
+        }
+        if (data == "[DONE]") break
+        sawEvent = true
+        val piece = streamChoiceDelta(data) ?: continue
+        if (piece.isEmpty()) continue
+        out.append(piece)
+        onPartial(out.toString())
     }
+    if (out.isNotEmpty()) return out.toString().trim()
+    if (!sawEvent && leftover.isNotEmpty()) {
+        val full = messageContent(leftover.toString())
+        if (full.isNotEmpty()) onPartial(full)
+        return full
+    }
+    return ""
+}
+
+internal fun streamChoiceDelta(raw: String): String? {
+    val obj = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
+    val err = obj["error"]?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
+    if (!err.isNullOrBlank()) error(err)
+    return obj["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+        ?.get("delta")?.jsonObject
+        ?.get("content")?.jsonPrimitive?.contentOrNull
+}
 
 internal fun streamCall(baseUrl: String, path: String, sessionId: String): String {
     val id = URLEncoder.encode(sessionId, StandardCharsets.UTF_8.name())
@@ -228,12 +273,8 @@ private fun messageContent(raw: String): String =
         ?.trim()
         .orEmpty()
 
-internal fun indexPrompt(src: String, tgt: String, text: String, draft: Boolean): String {
-    val notes = mutableListOf("【注意】这是直播实时字幕，请译成口语化、简洁的字幕")
-    if (draft) {
-        notes.add(0, "【注意】源文是一句还没说完的话的开头：只翻译已有的部分，不要补全或猜测后文")
-    }
-    val rules = notes.mapIndexed { i, line -> "${i + 1}. $line" }.joinToString("\n")
+internal fun indexPrompt(src: String, tgt: String, text: String): String {
+    val rules = "1. 【注意】这是直播实时字幕，请译成口语化、简洁的字幕"
     return "请将以下${zhName(src)}文本翻译成${zhName(tgt)}，并且严格遵循所有约束要求。\n\n【源文】\n$text\n\n【约束要求】\n$rules\n只输出译文，不要有任何额外说明。"
 }
 

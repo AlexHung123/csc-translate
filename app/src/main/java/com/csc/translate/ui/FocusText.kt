@@ -1,7 +1,8 @@
 package com.csc.translate.ui
 
 internal const val FOCUS_WINDOW_MS = 10_000L
-internal const val ENGLISH_SETTLE_MS = 500L
+internal const val LETTER_STREAM_MS = 50L
+internal const val SPACE_STREAM_MS = 20L
 
 internal data class FollowCursor(
     val spans: List<FocusSpan>,
@@ -87,7 +88,7 @@ internal fun followCursor(
     if (!primed) {
         return FollowCursor(
             spans = if (next.isEmpty()) emptyList() else listOf(FocusSpan(next, nowMs)),
-            revealed = next.length,
+            revealed = 0,
             primed = true,
         )
     }
@@ -105,46 +106,16 @@ internal fun followCursor(
     return FollowCursor(integrateSpans(spans, next, nowMs), shown, primed)
 }
 
-/** English types only a span that has sat unchanged for [ENGLISH_SETTLE_MS]. */
-internal fun stableEnd(
-    spans: List<FocusSpan>,
-    nowMs: Long,
-    english: Boolean,
-    settleMs: Long = ENGLISH_SETTLE_MS,
-): Int {
-    if (!english) return spans.sumOf { it.text.length }
-    var count = 0
-    for (span in spans) {
-        if (nowMs - span.arrivedAtMs < settleMs) break
-        count += span.text.length
-    }
-    return count
-}
-
-internal fun settleWaitMs(
-    spans: List<FocusSpan>,
-    revealed: Int,
-    nowMs: Long,
-    settleMs: Long = ENGLISH_SETTLE_MS,
-): Long {
-    var seen = 0
-    for (span in spans) {
-        val end = seen + span.text.length
-        if (revealed < end) {
-            return (settleMs - (nowMs - span.arrivedAtMs)).coerceAtLeast(16L)
-        }
-        seen = end
-    }
-    return settleMs
-}
+internal fun stableEnd(spans: List<FocusSpan>, nowMs: Long = 0, english: Boolean = false): Int =
+    spans.sumOf { it.text.length }
 
 internal fun typeDelayMs(char: Char, backlog: Int, english: Boolean = false): Long {
+    if (english) return if (char.isWhitespace()) SPACE_STREAM_MS else LETTER_STREAM_MS
     val base = when {
         char.isWhitespace() -> 10L
         char.code < 128 -> 16L
         else -> 32L
     }
-    if (english) return base
     val paced = when {
         backlog > 48 -> 4L
         backlog > 24 -> base / 2

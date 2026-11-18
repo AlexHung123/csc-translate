@@ -597,7 +597,7 @@ class LiveSessionController(
             srcLang = src,
             tgtLang = tgt,
             decode = { pcm, finish, context -> recognizer.transcribe(pcm, finish, context) },
-            translate = { text, draft -> translator.translate(text, draft) },
+            translate = { text, onPartial -> translator.translate(text, onPartial) },
             release = { recognizer.close() },
             voice = voice,
             onView = { source, target ->

@@ -1,6 +1,8 @@
 package com.csc.translate
 
 import com.csc.translate.ui.FocusSpan
+import com.csc.translate.ui.LETTER_STREAM_MS
+import com.csc.translate.ui.SPACE_STREAM_MS
 import com.csc.translate.ui.advanceRevealed
 import com.csc.translate.ui.focusPieces
 import com.csc.translate.ui.followCursor
@@ -75,17 +77,38 @@ class FocusTextTest {
     }
 
     @Test
-    fun freshEnglishTailWaitsToSettle() {
+    fun theFirstEnglishStartsUnrevealed() {
+        val cursor = followCursor(
+            spans = emptyList(),
+            revealed = 0,
+            primed = false,
+            next = "Hello",
+            english = true,
+            nowMs = 0,
+        )
+        assertEquals(0, cursor.revealed)
+        assertEquals("Hello", cursor.spans.single().text)
+    }
+
+    @Test
+    fun aFreshEnglishTailIsReadyToType() {
         val spans = listOf(FocusSpan("Hello.", 0), FocusSpan(" More.", 1_000))
-        assertEquals(6, stableEnd(spans, nowMs = 1_200, english = true))
-        assertEquals(12, stableEnd(spans, nowMs = 1_500, english = true))
+        assertEquals(12, stableEnd(spans, nowMs = 1_000, english = true))
     }
 
     @Test
     fun aLateFrameRevealsEveryCharacterTheClockEarned() {
         val text = "abcdefghijklmnopqrstuvwxyz"
-        assertEquals(1, advanceRevealed(0, text, text.length, elapsedMs = 16, english = true))
-        assertEquals(6, advanceRevealed(0, text, text.length, elapsedMs = 100, english = true))
+        assertEquals(0, advanceRevealed(0, text, text.length, elapsedMs = 16, english = true))
+        assertEquals(1, advanceRevealed(0, text, text.length, elapsedMs = 50, english = true))
+        assertEquals(2, advanceRevealed(0, text, text.length, elapsedMs = 100, english = true))
+    }
+
+    @Test
+    fun englishLettersTypeAtReadingPace() {
+        assertEquals(LETTER_STREAM_MS, typeDelayMs('a', backlog = 1, english = true))
+        assertEquals(SPACE_STREAM_MS, typeDelayMs(' ', backlog = 1, english = true))
+        assertEquals(LETTER_STREAM_MS, typeDelayMs('a', backlog = 60, english = true))
     }
 
     @Test

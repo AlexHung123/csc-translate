@@ -11,11 +11,14 @@ import com.csc.translate.pipeline.alignEnd
 import com.csc.translate.pipeline.asrAnswer
 import com.csc.translate.pipeline.pcm16ToFloat32
 import com.csc.translate.pipeline.splitHypothesis
+import com.csc.translate.pipeline.readChatStream
 import com.csc.translate.pipeline.streamCall
+import com.csc.translate.pipeline.streamChoiceDelta
 import com.csc.translate.pipeline.streamSessionId
 import com.csc.translate.pipeline.streamStart
 import com.csc.translate.pipeline.streamText
 import com.csc.translate.pipeline.stripVolatileEnd
+import okio.Buffer
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -153,8 +156,8 @@ class PipelineTest {
                 n += 1
                 if (n <= 3) "你好。今天天气真好" else "你好。今天天气真好天气"
             },
-            translate = { text, draft ->
-                if (!draft) finals += text
+            translate = { text, _ ->
+                finals += text
                 "t"
             },
         )
@@ -238,11 +241,9 @@ class PipelineTest {
             srcLang = "zh",
             tgtLang = "en",
             decode = { _, _, _ -> "一一一一。二二二二。三三三三。還有尾巴啊" },
-            translate = { text, draft ->
-                if (!draft) {
-                    entered += text
-                    hold.await()
-                }
+            translate = { text, _ ->
+                entered += text
+                hold.await()
                 "T:$text"
             },
         )
@@ -272,11 +273,9 @@ class PipelineTest {
             tgtLang = "en",
             translationQueue = 1,
             decode = { _, _, _ -> "一一一一。二二二二。三三三三。還有尾巴啊今天" },
-            translate = { text, draft ->
-                if (!draft) {
-                    entered += text
-                    hold.await()
-                }
+            translate = { text, _ ->
+                entered += text
+                hold.await()
                 "T:$text"
             },
         )
@@ -299,7 +298,30 @@ class PipelineTest {
     }
 
     @Test
-    fun theDraftStaysUntilTheLineIsTranslated() = runBlocking {
+    fun pendingChineseIsNotTranslated() = runBlocking {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            decode = { _, _, _ -> "你好世界今天" },
+            translate = { text, _ ->
+                seen += text
+                "T"
+            },
+        )
+        session.write(sinePcm(24_000))
+        session.awaitIdle()
+        session.write(sinePcm(16_000))
+        session.awaitIdle()
+        assertTrue(session.snapshot().first, session.snapshot().first.contains("你好"))
+        assertEquals("", session.snapshot().second)
+        assertTrue(seen.toString(), seen.isEmpty())
+        session.stop()
+    }
+
+    @Test
+    fun aLockedLineWaitsForTheFinalTranslation() = runBlocking {
         val hold = CompletableDeferred<Unit>()
         var punctuate = false
         val finals = Collections.synchronizedList(mutableListOf<String>())
@@ -307,24 +329,19 @@ class PipelineTest {
             parent = this,
             srcLang = "zh",
             tgtLang = "en",
-            decode = { _, _, _ -> if (punctuate) "你好世界。還有尾巴啊今天" else "你好世界" },
-            translate = { _, draft ->
-                if (draft) {
-                    "草稿"
-                } else {
-                    finals += "line"
-                    hold.await()
-                    "正式"
-                }
+            decode = { _, _, _ -> if (punctuate) "你好世界。還有尾巴啊今天" else "你好世界今天" },
+            translate = { text, _ ->
+                finals += text
+                hold.await()
+                "正式"
             },
         )
         session.write(sinePcm(24_000))
         session.awaitIdle()
         session.write(sinePcm(16_000))
         session.awaitIdle()
-        withTimeout(5_000) {
-            while (session.snapshot().second.contains("草稿").not()) delay(10)
-        }
+        assertEquals("", session.snapshot().second)
+        assertTrue(finals.toString(), finals.isEmpty())
         punctuate = true
         session.write(sinePcm(16_000))
         session.awaitIdle()
@@ -333,12 +350,67 @@ class PipelineTest {
         withTimeout(5_000) {
             while (finals.isEmpty()) delay(10)
         }
-        assertTrue(session.snapshot().second, session.snapshot().second.contains("草稿"))
+        assertEquals(listOf("你好世界。"), finals.toList())
+        assertEquals("", session.snapshot().second)
         hold.complete(Unit)
         session.write(ByteArray(24_000 * 2))
         session.finish()
         assertTrue(session.snapshot().second, session.snapshot().second.contains("正式"))
         session.stop()
+    }
+
+    @Test
+    fun aLockedLineStreamsTheTranslation() = runBlocking {
+        val seen = Collections.synchronizedList(mutableListOf<String>())
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            decode = { _, _, _ -> "你好。" },
+            translate = { _, onPartial ->
+                onPartial("Hel")
+                onPartial("Hello.")
+                "Hello."
+            },
+            onView = { _, tgt -> if (tgt.isNotBlank()) seen += tgt },
+        )
+        session.write(sinePcm(16_000))
+        session.write(ByteArray(24_000 * 2))
+        session.finish()
+        assertTrue(seen.toString(), seen.contains("Hel"))
+        assertTrue(seen.toString(), seen.last().contains("Hello."))
+        session.stop()
+    }
+
+    @Test
+    fun chatStreamAppendsEachDelta() {
+        val parts = mutableListOf<String>()
+        val sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo.\"}}]}\n\n" +
+            "data: [DONE]\n\n"
+        val out = readChatStream(Buffer().writeUtf8(sse)) { parts += it }
+        assertEquals("Hello.", out)
+        assertEquals(listOf("Hel", "Hello."), parts)
+    }
+
+    @Test
+    fun chatStreamReadsANonStreamedReply() {
+        val parts = mutableListOf<String>()
+        val raw = """{"choices":[{"message":{"content":"Hello."}}]}"""
+        assertEquals("Hello.", readChatStream(Buffer().writeUtf8(raw)) { parts += it })
+        assertEquals(listOf("Hello."), parts)
+    }
+
+    @Test
+    fun chatStreamDeltaSkipsEmptyAndReadsContent() {
+        assertEquals("Hi", streamChoiceDelta("""{"choices":[{"delta":{"content":"Hi"}}]}"""))
+        assertEquals(null, streamChoiceDelta("""{"choices":[{"delta":{}}]}"""))
+        try {
+            streamChoiceDelta("""{"error":{"message":"nope"}}""")
+            org.junit.Assert.fail("expected error")
+        } catch (t: Throwable) {
+            assertTrue(t.message, t.message!!.contains("nope"))
+        }
     }
 
     @Test

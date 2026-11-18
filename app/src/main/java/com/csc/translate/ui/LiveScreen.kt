@@ -283,10 +283,8 @@ private fun FollowText(
         var marked = System.currentTimeMillis()
         while (true) {
             val full = spans.joinToString("") { it.text }
-            val now = System.currentTimeMillis()
-            if (revealed >= full.length || revealed >= stableEnd(spans, now, english)) {
-                val wait = if (revealed >= full.length) 16L else settleWaitMs(spans, revealed, now)
-                delay(wait)
+            if (revealed >= full.length) {
+                delay(16L)
                 marked = System.currentTimeMillis()
                 continue
             }
@@ -296,7 +294,7 @@ private fun FollowText(
             val next = advanceRevealed(
                 revealed,
                 latest,
-                stableEnd(spans, after, english),
+                latest.length,
                 after - marked,
                 english,
             )
