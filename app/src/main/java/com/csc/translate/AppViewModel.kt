@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.csc.translate.data.DisplayMode
+import com.csc.translate.data.EnglishPace
 import com.csc.translate.data.HearSource
 import com.csc.translate.data.Pipeline
 import com.csc.translate.data.TypeScale
@@ -132,6 +133,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setTypeScale(scale: TypeScale) {
         viewModelScope.launch { container.settings.setTypeScale(scale) }
+    }
+
+    fun setEnglishPace(pace: EnglishPace) {
+        viewModelScope.launch { container.settings.setEnglishPace(pace) }
+    }
+
+    fun setEnglishLetterMs(ms: Int) {
+        viewModelScope.launch { container.settings.setEnglishLetterMs(ms) }
     }
 
     fun setHearSource(source: HearSource) {

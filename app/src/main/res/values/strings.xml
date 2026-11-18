@@ -34,6 +34,12 @@
     <string name="font_small">Small</string>
     <string name="font_medium">Medium</string>
     <string name="font_large">Large</string>
+    <string name="english_pace">English speed</string>
+    <string name="english_pace_slow">Slow</string>
+    <string name="english_pace_medium">Medium</string>
+    <string name="english_pace_fast">Fast</string>
+    <string name="english_pace_custom">Custom</string>
+    <string name="english_pace_ms_hint">10–200 ms</string>
     <string name="pipeline">Pipeline</string>
     <string name="pipeline_simul">SimulMT</string>
     <string name="pipeline_tomoru">ASR + Translate</string>

@@ -3,6 +3,7 @@ package com.csc.translate.data
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -57,6 +58,25 @@ enum class TypeScale(val key: String, val sp: Int, val lineHeight: Int) {
     }
 }
 
+const val ENGLISH_LETTER_MS_MIN = 10
+const val ENGLISH_LETTER_MS_MAX = 200
+
+enum class EnglishPace(val key: String, val letterMs: Long, val spaceMs: Long) {
+    Slow("slow", 80, 32),
+    Medium("medium", 50, 20),
+    Fast("fast", 25, 10),
+    Custom("custom", 50, 20),
+    ;
+
+    companion object {
+        fun from(key: String?) = entries.find { it.key == key } ?: Medium
+    }
+}
+
+fun clampEnglishLetterMs(ms: Int): Int = ms.coerceIn(ENGLISH_LETTER_MS_MIN, ENGLISH_LETTER_MS_MAX)
+
+fun spaceMsForLetter(letterMs: Int): Int = (letterMs * 2 / 5).coerceAtLeast(1)
+
 data class UserSettings(
     val pipeline: Pipeline = Pipeline.Tomoru,
     val baseUrl: String = DEFAULT_BASE_URL,
@@ -71,9 +91,21 @@ data class UserSettings(
     val vad: Boolean = true,
     val displayMode: DisplayMode = DisplayMode.Split,
     val typeScale: TypeScale = TypeScale.Medium,
+    val englishPace: EnglishPace = EnglishPace.Medium,
+    val englishLetterMs: Int = EnglishPace.Medium.letterMs.toInt(),
     val hearSource: HearSource = HearSource.Mic,
 ) {
     val sourceIsEnglish: Boolean get() = direction == "en-zh"
+
+    val typedLetterMs: Long
+        get() = if (englishPace == EnglishPace.Custom) englishLetterMs.toLong() else englishPace.letterMs
+
+    val typedSpaceMs: Long
+        get() = if (englishPace == EnglishPace.Custom) {
+            spaceMsForLetter(englishLetterMs).toLong()
+        } else {
+            englishPace.spaceMs
+        }
 
     fun activeUrl(): String = when (pipeline) {
         Pipeline.Simul -> baseUrl
@@ -118,6 +150,10 @@ class SettingsStore(context: Context) {
             vad = prefs[KEY_VAD] ?: true,
             displayMode = DisplayMode.from(prefs[KEY_DISPLAY]),
             typeScale = TypeScale.from(prefs[KEY_FONT]),
+            englishPace = EnglishPace.from(prefs[KEY_ENGLISH_PACE]),
+            englishLetterMs = clampEnglishLetterMs(
+                prefs[KEY_ENGLISH_LETTER_MS] ?: EnglishPace.Medium.letterMs.toInt(),
+            ),
             hearSource = HearSource.from(prefs[KEY_HEAR]),
         )
     }.distinctUntilChanged()
@@ -202,6 +238,23 @@ class SettingsStore(context: Context) {
         dataStore.edit { it[KEY_FONT] = scale.key }
     }
 
+    suspend fun setEnglishPace(pace: EnglishPace) {
+        dataStore.edit { prefs ->
+            prefs[KEY_ENGLISH_PACE] = pace.key
+            if (pace != EnglishPace.Custom) {
+                prefs[KEY_ENGLISH_LETTER_MS] = pace.letterMs.toInt()
+            }
+        }
+    }
+
+    suspend fun setEnglishLetterMs(ms: Int) {
+        val clamped = clampEnglishLetterMs(ms)
+        dataStore.edit { prefs ->
+            prefs[KEY_ENGLISH_PACE] = EnglishPace.Custom.key
+            prefs[KEY_ENGLISH_LETTER_MS] = clamped
+        }
+    }
+
     suspend fun setHearSource(source: HearSource) {
         dataStore.edit { it[KEY_HEAR] = source.key }
     }
@@ -226,6 +279,8 @@ class SettingsStore(context: Context) {
         val KEY_VAD = booleanPreferencesKey("vad")
         val KEY_DISPLAY = stringPreferencesKey("display_mode")
         val KEY_FONT = stringPreferencesKey("type_scale")
+        val KEY_ENGLISH_PACE = stringPreferencesKey("english_pace")
+        val KEY_ENGLISH_LETTER_MS = intPreferencesKey("english_letter_ms")
         val KEY_HEAR = stringPreferencesKey("hear_source")
     }
 }

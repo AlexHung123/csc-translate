@@ -360,6 +360,34 @@ class PipelineTest {
     }
 
     @Test
+    fun aHungLineDoesNotBlockTheNextTranslation() = runBlocking {
+        val entered = Collections.synchronizedList(mutableListOf<String>())
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            translateLimitMs = 80,
+            decode = { _, _, _ -> "一一一一。二二二二。" },
+            translate = { text, onPartial ->
+                entered += text
+                if ("一" in text) delay(10_000)
+                onPartial("T:$text")
+                "T:$text"
+            },
+        )
+        session.write(sinePcm(16_000))
+        session.write(ByteArray(24_000 * 2))
+        session.finish()
+        withTimeout(5_000) {
+            while (session.snapshot().second.contains("T:二二二二").not()) delay(10)
+        }
+        assertTrue(entered.toString(), entered.any { "一" in it })
+        assertTrue(entered.toString(), entered.any { "二" in it })
+        assertFalse(session.snapshot().second, session.snapshot().second.contains("T:一一一一"))
+        session.stop()
+    }
+
+    @Test
     fun aLockedLineStreamsTheTranslation() = runBlocking {
         val seen = Collections.synchronizedList(mutableListOf<String>())
         val session = StretchSession(

@@ -15,6 +15,8 @@ class RelayTest {
                 direction = "en-zh",
                 displayMode = "split",
                 typeScale = "medium",
+                englishPace = "custom",
+                englishLetterMs = 40,
                 sourceText = "He said hello.",
                 targetText = "他说，你好。",
                 paused = false,
@@ -24,6 +26,8 @@ class RelayTest {
         val decoded = AppJson.decodeFromString<RelayPicture>(json)
         assertEquals("live", decoded.phase)
         assertEquals("split", decoded.displayMode)
+        assertEquals("custom", decoded.englishPace)
+        assertEquals(40, decoded.englishLetterMs)
         assertEquals("He said hello.", decoded.sourceText)
         assertEquals("他说，你好。", decoded.targetText)
         assertEquals(false, decoded.paused)

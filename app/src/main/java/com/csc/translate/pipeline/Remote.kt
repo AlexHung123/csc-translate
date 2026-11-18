@@ -112,13 +112,26 @@ class QwenAsr(
     }
 }
 
+private const val INDEX_CONNECT_S = 10L
+private const val INDEX_READ_S = 15L
+private const val INDEX_WRITE_S = 10L
+private const val INDEX_CALL_S = 30L
+
 class IndexTranslator(
-    private val client: OkHttpClient,
+    shared: OkHttpClient,
     private val src: String,
     private val tgt: String,
     private val baseUrl: String,
     private val model: String,
 ) {
+    /** Own timeouts: the shared client leaves reads open for ASR. */
+    private val client = shared.newBuilder()
+        .connectTimeout(INDEX_CONNECT_S, TimeUnit.SECONDS)
+        .readTimeout(INDEX_READ_S, TimeUnit.SECONDS)
+        .writeTimeout(INDEX_WRITE_S, TimeUnit.SECONDS)
+        .callTimeout(INDEX_CALL_S, TimeUnit.SECONDS)
+        .build()
+
     suspend fun translate(text: String, onPartial: (String) -> Unit = {}): String {
         val body = buildJsonObject {
             put("model", model)
@@ -142,7 +155,7 @@ class IndexTranslator(
             .header("User-Agent", "Index-Translate-Client/1.0")
             .post(body.toString().toRequestBody(jsonType))
             .build()
-        return awaitStream(client, request, 20, onPartial)
+        return awaitStream(client, request, INDEX_CALL_S, onPartial)
     }
 }
 

@@ -18,6 +18,8 @@ data class RelayPicture(
     val direction: String,
     val displayMode: String,
     val typeScale: String,
+    val englishPace: String = "medium",
+    val englishLetterMs: Int = 50,
     val sourceText: String,
     val targetText: String,
     val paused: Boolean,

@@ -121,6 +121,8 @@ fun LiveScreen(
                             status = status,
                             background = Color.White,
                             typeScale = settings.typeScale,
+                            englishLetterMs = settings.typedLetterMs,
+                            englishSpaceMs = settings.typedSpaceMs,
                         )
                         TranscriptPane(
                             modifier = Modifier
@@ -133,6 +135,8 @@ fun LiveScreen(
                             status = status,
                             background = Pane,
                             typeScale = settings.typeScale,
+                            englishLetterMs = settings.typedLetterMs,
+                            englishSpaceMs = settings.typedSpaceMs,
                         )
                     }
                 }
@@ -147,6 +151,8 @@ fun LiveScreen(
                         status = status,
                         background = Pane,
                         typeScale = settings.typeScale,
+                        englishLetterMs = settings.typedLetterMs,
+                        englishSpaceMs = settings.typedSpaceMs,
                     )
                 }
                 DisplayMode.Source -> {
@@ -160,6 +166,8 @@ fun LiveScreen(
                         status = status,
                         background = Color.White,
                         typeScale = settings.typeScale,
+                        englishLetterMs = settings.typedLetterMs,
+                        englishSpaceMs = settings.typedSpaceMs,
                     )
                 }
             }
@@ -219,6 +227,8 @@ private fun TranscriptPane(
     status: String,
     background: Color,
     typeScale: TypeScale,
+    englishLetterMs: Long,
+    englishSpaceMs: Long,
 ) {
     val scroll = rememberScrollState()
     LaunchedEffect(scroll.maxValue) {
@@ -241,6 +251,8 @@ private fun TranscriptPane(
                 english = english,
                 fontSizeSp = typeScale.sp,
                 lineHeightSp = typeScale.lineHeight,
+                letterMs = englishLetterMs,
+                spaceMs = englishSpaceMs,
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(scroll),
@@ -261,11 +273,14 @@ private fun FollowText(
     english: Boolean,
     fontSizeSp: Int,
     lineHeightSp: Int,
+    letterMs: Long,
+    spaceMs: Long,
     modifier: Modifier = Modifier,
 ) {
-    var spans by remember { mutableStateOf<List<FocusSpan>>(emptyList()) }
-    var revealed by remember { mutableIntStateOf(0) }
-    var primed by remember { mutableStateOf(false) }
+    val start = remember { initialCursor(text, System.currentTimeMillis()) }
+    var spans by remember { mutableStateOf(start.spans) }
+    var revealed by remember { mutableIntStateOf(start.revealed) }
+    var primed by remember { mutableStateOf(start.primed) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var cursorOn by remember { mutableStateOf(true) }
 
@@ -279,7 +294,7 @@ private fun FollowText(
     }
     // Keep running across new text. Restarting here cancelled the wait, so nothing was ever revealed.
     // Scrolling waits for layout, so it stays out of this loop.
-    LaunchedEffect(english) {
+    LaunchedEffect(english, letterMs, spaceMs) {
         var marked = System.currentTimeMillis()
         while (true) {
             val full = spans.joinToString("") { it.text }
@@ -288,7 +303,15 @@ private fun FollowText(
                 marked = System.currentTimeMillis()
                 continue
             }
-            delay(typeDelayMs(full[revealed], full.length - revealed, english))
+            delay(
+                typeDelayMs(
+                    full[revealed],
+                    full.length - revealed,
+                    english,
+                    letterMs,
+                    spaceMs,
+                ),
+            )
             val after = System.currentTimeMillis()
             val latest = spans.joinToString("") { it.text }
             val next = advanceRevealed(
@@ -297,6 +320,8 @@ private fun FollowText(
                 latest.length,
                 after - marked,
                 english,
+                letterMs,
+                spaceMs,
             )
             marked = after
             if (next == revealed) continue

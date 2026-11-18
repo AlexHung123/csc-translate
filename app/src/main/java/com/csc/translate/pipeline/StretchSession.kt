@@ -7,11 +7,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.max
@@ -26,6 +28,7 @@ private const val ENDED_GAP = (0.35 * RATE).toInt()
 private const val LONGEST = 15 * RATE
 private const val TAIL_WAIT = (0.6 * RATE).toInt()
 private const val TRANSLATION_QUEUE = 64
+private const val TRANSLATE_LIMIT_MS = 30_000L
 private const val ASR_CONTEXT_LIMIT = 80
 private const val ASR_FAILS = 5
 
@@ -41,7 +44,8 @@ private const val ASR_FAILS = 5
  * Finished lines wait in a queue of [translationQueue] and are translated one at a time, as
  * Tomoru's live session does. A line that does not fit is left untranslated. Only a locked
  * sentence is sent to [translate]; the open Chinese tail stays untranslated until it locks.
- * Tokens of a locked line append on screen as they stream in.
+ * Tokens of a locked line append on screen as they stream in. A call that exceeds
+ * [translateLimitMs] is dropped so the next locked line can start.
  */
 internal class StretchSession(
     parent: CoroutineScope,
@@ -55,6 +59,7 @@ internal class StretchSession(
     private val onView: (src: String, tgt: String) -> Unit = { _, _ -> },
     private val onError: (Throwable) -> Unit = {},
     private val translationQueue: Int = TRANSLATION_QUEUE,
+    private val translateLimitMs: Long = TRANSLATE_LIMIT_MS,
 ) {
     private val scope = CoroutineScope(SupervisorJob(parent.coroutineContext[Job]) + Dispatchers.Default)
     private val detector = Detector(voice)
@@ -353,6 +358,7 @@ internal class StretchSession(
                 inflight.incrementAndGet()
                 if (translations.trySend(Work(lines.lastIndex, sentence)).isFailure) {
                     inflight.decrementAndGet()
+                    warnTranslate("drop ${sentence.take(40)}")
                 }
             }
             pending = hypothesis.pending
@@ -367,10 +373,19 @@ internal class StretchSession(
     }
 
     private suspend fun translateFinal(work: Work) {
+        val started = System.currentTimeMillis()
+        var first = true
         try {
-            val out = translate(work.text) { partial ->
-                val view = synchronized(lock) { growTarget(work, partial) }
-                view?.let { (src, tgt) -> onView(src, tgt) }
+            traceTranslate("start ${inflight.get()} ${work.text.take(40)}")
+            val out = withTimeout(translateLimitMs) {
+                translate(work.text) { partial ->
+                    if (first) {
+                        first = false
+                        traceTranslate("first ${System.currentTimeMillis() - started}ms ${work.text.take(40)}")
+                    }
+                    val view = synchronized(lock) { growTarget(work, partial) }
+                    view?.let { (src, tgt) -> onView(src, tgt) }
+                }
             }
             var view: Pair<String, String>? = null
             synchronized(lock) {
@@ -381,10 +396,14 @@ internal class StretchSession(
                 }
             }
             view?.let { (src, tgt) -> onView(src, tgt) }
+            traceTranslate("done ${System.currentTimeMillis() - started}ms ${work.text.take(40)}")
+        } catch (t: TimeoutCancellationException) {
+            warnTranslate("timeout ${System.currentTimeMillis() - started}ms ${work.text.take(40)}")
         } catch (t: CancellationException) {
             throw t
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
             // Keep any tokens already shown; a failed line with none stays blank.
+            warnTranslate("fail ${work.text.take(40)}", t)
         } finally {
             inflight.decrementAndGet()
         }
@@ -466,5 +485,19 @@ private fun trace(message: String) {
         Log.i("CscAsr", message)
     } catch (_: RuntimeException) {
         // JVM unit tests ship an android.util.Log that throws.
+    }
+}
+
+private fun traceTranslate(message: String) {
+    try {
+        Log.i("CscTranslate", message)
+    } catch (_: RuntimeException) {
+    }
+}
+
+private fun warnTranslate(message: String, error: Throwable? = null) {
+    try {
+        if (error != null) Log.w("CscTranslate", message, error) else Log.w("CscTranslate", message)
+    } catch (_: RuntimeException) {
     }
 }

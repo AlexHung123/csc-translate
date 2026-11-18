@@ -16,6 +16,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -47,12 +48,16 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.csc.translate.R
 import com.csc.translate.data.DisplayMode
+import com.csc.translate.data.ENGLISH_LETTER_MS_MAX
+import com.csc.translate.data.ENGLISH_LETTER_MS_MIN
+import com.csc.translate.data.EnglishPace
 import com.csc.translate.data.MeetingIds
 import com.csc.translate.data.HearSource
 import com.csc.translate.data.Pipeline
@@ -83,6 +88,8 @@ fun SettingsSheet(
     onRefresh: () -> Unit,
     onDisplayMode: (DisplayMode) -> Unit,
     onTypeScale: (TypeScale) -> Unit,
+    onEnglishPace: (EnglishPace) -> Unit,
+    onEnglishLetterMs: (Int) -> Unit,
     onHearSource: (HearSource) -> Unit,
     onSaveIndex: (String) -> Unit,
     onSaveRelay: (String) -> Unit,
@@ -97,6 +104,12 @@ fun SettingsSheet(
     var relay by remember { mutableStateOf(settings.relayUrl) }
     var passcode by remember { mutableStateOf(settings.passcode) }
     var confirmReset by remember { mutableStateOf(false) }
+    var letterDraft by remember { mutableStateOf(settings.typedLetterMs.toString()) }
+    LaunchedEffect(settings.englishPace, settings.englishLetterMs, settings.typedLetterMs) {
+        if (settings.englishPace != EnglishPace.Custom) {
+            letterDraft = settings.typedLetterMs.toString()
+        }
+    }
     LaunchedEffect(settings.pipeline, settings.baseUrl, settings.tomoruUrl) {
         url = settings.activeUrl()
     }
@@ -171,6 +184,49 @@ fun SettingsSheet(
                     },
                 ),
             )
+
+            Spacer(Modifier.height(22.dp))
+            SectionLabel(stringResource(R.string.english_pace))
+            ChoiceRow(
+                options = listOf(
+                    Choice(stringResource(R.string.english_pace_slow), settings.englishPace == EnglishPace.Slow) {
+                        onEnglishPace(EnglishPace.Slow)
+                    },
+                    Choice(stringResource(R.string.english_pace_medium), settings.englishPace == EnglishPace.Medium) {
+                        onEnglishPace(EnglishPace.Medium)
+                    },
+                    Choice(stringResource(R.string.english_pace_fast), settings.englishPace == EnglishPace.Fast) {
+                        onEnglishPace(EnglishPace.Fast)
+                    },
+                ),
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                ChoiceChip(
+                    modifier = Modifier,
+                    label = stringResource(R.string.english_pace_custom),
+                    selected = settings.englishPace == EnglishPace.Custom,
+                    onClick = { onEnglishPace(EnglishPace.Custom) },
+                )
+                OutlinedTextField(
+                    value = letterDraft,
+                    onValueChange = { raw ->
+                        val digits = raw.filter { it.isDigit() }.take(3)
+                        letterDraft = digits
+                        val n = digits.toIntOrNull() ?: return@OutlinedTextField
+                        if (n in ENGLISH_LETTER_MS_MIN..ENGLISH_LETTER_MS_MAX) onEnglishLetterMs(n)
+                    },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text(stringResource(R.string.english_pace_ms_hint), color = Mute) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+            }
 
             if (Build.VERSION.SDK_INT >= 29) {
                 Spacer(Modifier.height(22.dp))

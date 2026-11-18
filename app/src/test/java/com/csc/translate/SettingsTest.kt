@@ -5,6 +5,9 @@ import com.csc.translate.data.DEFAULT_INDEX_URL
 import com.csc.translate.data.DEFAULT_RELAY_URL
 import com.csc.translate.data.LOCAL_INDEX_MODEL
 import com.csc.translate.data.LOCAL_INDEX_URL
+import com.csc.translate.data.EnglishPace
+import com.csc.translate.data.clampEnglishLetterMs
+import com.csc.translate.data.spaceMsForLetter
 import com.csc.translate.data.HearSource
 import com.csc.translate.data.MeetingIds
 import com.csc.translate.data.Passcodes
@@ -90,5 +93,21 @@ class SettingsTest {
         assertEquals(HearSource.Mic, UserSettings().hearSource)
         assertEquals(HearSource.System, HearSource.from("system"))
         assertEquals(HearSource.Mic, HearSource.from(null))
+    }
+
+    @Test
+    fun englishPaceDefaultsToMedium() {
+        assertEquals(EnglishPace.Medium, UserSettings().englishPace)
+        assertEquals(50L, EnglishPace.Medium.letterMs)
+        assertEquals(EnglishPace.Slow, EnglishPace.from("slow"))
+        assertEquals(EnglishPace.Fast, EnglishPace.from("fast"))
+        assertEquals(EnglishPace.Medium, EnglishPace.from(null))
+        assertEquals(EnglishPace.Custom, EnglishPace.from("custom"))
+        val custom = UserSettings(englishPace = EnglishPace.Custom, englishLetterMs = 40)
+        assertEquals(40L, custom.typedLetterMs)
+        assertEquals(16L, custom.typedSpaceMs)
+        assertEquals(10, clampEnglishLetterMs(9))
+        assertEquals(200, clampEnglishLetterMs(500))
+        assertEquals(16, spaceMsForLetter(40))
     }
 }

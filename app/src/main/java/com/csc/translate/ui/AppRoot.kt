@@ -18,6 +18,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,6 +27,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -165,6 +167,12 @@ fun AppRoot(viewModel: AppViewModel) {
 
     LaunchedEffect(Unit) {
         viewModel.messages.collect { snackbar.showSnackbar(it) }
+    }
+
+    val view = LocalView.current
+    DisposableEffect(live.inProgress) {
+        view.keepScreenOn = live.inProgress
+        onDispose { view.keepScreenOn = false }
     }
 
     LaunchedEffect(live.phase) {
@@ -308,6 +316,8 @@ fun AppRoot(viewModel: AppViewModel) {
             onRefresh = viewModel::refreshConnection,
             onDisplayMode = viewModel::setDisplayMode,
             onTypeScale = viewModel::setTypeScale,
+            onEnglishPace = viewModel::setEnglishPace,
+            onEnglishLetterMs = viewModel::setEnglishLetterMs,
             onHearSource = viewModel::setHearSource,
             onSaveIndex = viewModel::setIndexUrl,
             onSaveRelay = viewModel::setRelayUrl,

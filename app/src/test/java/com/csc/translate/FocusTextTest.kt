@@ -6,6 +6,7 @@ import com.csc.translate.ui.SPACE_STREAM_MS
 import com.csc.translate.ui.advanceRevealed
 import com.csc.translate.ui.focusPieces
 import com.csc.translate.ui.followCursor
+import com.csc.translate.ui.initialCursor
 import com.csc.translate.ui.integrateSpans
 import com.csc.translate.ui.stableEnd
 import com.csc.translate.ui.typeDelayMs
@@ -77,6 +78,23 @@ class FocusTextTest {
     }
 
     @Test
+    fun existingTextStartsFullyRevealed() {
+        val cursor = initialCursor("你好世界 Hello", nowMs = 1_000)
+        assertEquals(true, cursor.primed)
+        assertEquals(10, cursor.revealed)
+        assertEquals("你好世界 Hello", cursor.spans.single().text)
+        assertEquals(1_000L, cursor.spans.single().arrivedAtMs)
+    }
+
+    @Test
+    fun emptyTextStartsUnrevealed() {
+        val cursor = initialCursor("", nowMs = 1_000)
+        assertEquals(false, cursor.primed)
+        assertEquals(0, cursor.revealed)
+        assertTrue(cursor.spans.isEmpty())
+    }
+
+    @Test
     fun theFirstEnglishStartsUnrevealed() {
         val cursor = followCursor(
             spans = emptyList(),
@@ -109,6 +127,9 @@ class FocusTextTest {
         assertEquals(LETTER_STREAM_MS, typeDelayMs('a', backlog = 1, english = true))
         assertEquals(SPACE_STREAM_MS, typeDelayMs(' ', backlog = 1, english = true))
         assertEquals(LETTER_STREAM_MS, typeDelayMs('a', backlog = 60, english = true))
+        assertEquals(80L, typeDelayMs('a', backlog = 1, english = true, letterMs = 80, spaceMs = 32))
+        assertEquals(32L, typeDelayMs(' ', backlog = 1, english = true, letterMs = 80, spaceMs = 32))
+        assertEquals(25L, typeDelayMs('a', backlog = 1, english = true, letterMs = 25, spaceMs = 10))
     }
 
     @Test

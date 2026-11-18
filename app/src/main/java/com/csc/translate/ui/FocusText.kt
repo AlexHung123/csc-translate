@@ -73,6 +73,18 @@ internal fun focusPieces(
     return out
 }
 
+/** First composition: show text that is already on the session, then type only what arrives later. */
+internal fun initialCursor(text: String, nowMs: Long): FollowCursor {
+    if (text.isEmpty()) {
+        return FollowCursor(spans = emptyList(), revealed = 0, primed = false)
+    }
+    return FollowCursor(
+        spans = listOf(FocusSpan(text, nowMs)),
+        revealed = text.length,
+        primed = true,
+    )
+}
+
 /**
  * Moves the typewriter the way the watch page does. English keeps the cursor where it is,
  * so a revised line replaces text already on screen. Other languages retype from the edit.
@@ -109,8 +121,14 @@ internal fun followCursor(
 internal fun stableEnd(spans: List<FocusSpan>, nowMs: Long = 0, english: Boolean = false): Int =
     spans.sumOf { it.text.length }
 
-internal fun typeDelayMs(char: Char, backlog: Int, english: Boolean = false): Long {
-    if (english) return if (char.isWhitespace()) SPACE_STREAM_MS else LETTER_STREAM_MS
+internal fun typeDelayMs(
+    char: Char,
+    backlog: Int,
+    english: Boolean = false,
+    letterMs: Long = LETTER_STREAM_MS,
+    spaceMs: Long = SPACE_STREAM_MS,
+): Long {
+    if (english) return if (char.isWhitespace()) spaceMs else letterMs
     val base = when {
         char.isWhitespace() -> 10L
         char.code < 128 -> 16L
@@ -131,11 +149,13 @@ internal fun advanceRevealed(
     limit: Int,
     elapsedMs: Long,
     english: Boolean,
+    letterMs: Long = LETTER_STREAM_MS,
+    spaceMs: Long = SPACE_STREAM_MS,
 ): Int {
     var cursor = revealed
     var budget = elapsedMs
     while (cursor < limit && cursor < text.length && budget > 0) {
-        val cost = typeDelayMs(text[cursor], text.length - cursor, english)
+        val cost = typeDelayMs(text[cursor], text.length - cursor, english, letterMs, spaceMs)
         if (budget < cost) break
         budget -= cost
         cursor += 1
