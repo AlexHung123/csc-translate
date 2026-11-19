@@ -5,6 +5,7 @@ import com.csc.translate.pipeline.FRAME
 import com.csc.translate.pipeline.Hypothesis
 import com.csc.translate.pipeline.RATE
 import com.csc.translate.pipeline.StretchSession
+import com.csc.translate.pipeline.liveSourceRows
 import com.csc.translate.pipeline.Voice
 import com.csc.translate.pipeline.VoiceAt
 import com.csc.translate.pipeline.alignEnd
@@ -356,6 +357,31 @@ class PipelineTest {
         session.write(ByteArray(24_000 * 2))
         session.finish()
         assertTrue(session.snapshot().second, session.snapshot().second.contains("正式"))
+        session.stop()
+    }
+
+    @Test
+    fun liveViewKeepsLineIdsAcrossALock() = runBlocking {
+        val session = StretchSession(
+            parent = this,
+            srcLang = "zh",
+            tgtLang = "en",
+            decode = { _, _, _ -> "一一一一。二二二二。" },
+            translate = { text, _ -> "T:$text" },
+        )
+        session.write(sinePcm(16_000))
+        session.write(ByteArray(24_000 * 2))
+        session.finish()
+        val snap = session.liveView()
+        val full = session.snapshot().first
+        assertTrue(full, full.contains("一一一一") && full.contains("二二二二"))
+        assertEquals(2, snap.lines.size)
+        assertEquals(1L, snap.lines[0].id)
+        assertEquals(2L, snap.lines[1].id)
+        val rows = liveSourceRows(snap.lines, snap.pending, snap.pendingId, window = 1)
+        assertEquals(1, rows.size)
+        assertEquals("二二二二。", rows.single().text)
+        assertTrue(rows.single().typing)
         session.stop()
     }
 

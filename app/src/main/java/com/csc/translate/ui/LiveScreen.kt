@@ -29,11 +29,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,8 +56,10 @@ import com.csc.translate.data.DisplayMode
 import com.csc.translate.data.HearSource
 import com.csc.translate.data.TypeScale
 import com.csc.translate.data.UserSettings
+import com.csc.translate.session.LiveLine
 import com.csc.translate.session.LiveUiState
 import com.csc.translate.session.Phase
+import kotlinx.coroutines.flow.first
 import com.csc.translate.ui.theme.Danger
 import com.csc.translate.ui.theme.FocusDim
 import com.csc.translate.ui.theme.Ink
@@ -117,6 +121,7 @@ fun LiveScreen(
                                 .fillMaxWidth(),
                             language = labels.first,
                             text = live.sourceText,
+                            lines = live.sourceLines,
                             english = sourceEnglish,
                             status = status,
                             background = Color.White,
@@ -131,6 +136,7 @@ fun LiveScreen(
                                 .padding(bottom = 96.dp),
                             language = labels.second,
                             text = live.targetText,
+                            lines = live.targetLines,
                             english = targetEnglish,
                             status = status,
                             background = Pane,
@@ -147,6 +153,7 @@ fun LiveScreen(
                             .padding(bottom = 96.dp),
                         language = labels.second,
                         text = live.targetText,
+                        lines = live.targetLines,
                         english = targetEnglish,
                         status = status,
                         background = Pane,
@@ -162,6 +169,7 @@ fun LiveScreen(
                             .padding(bottom = 96.dp),
                         language = labels.first,
                         text = live.sourceText,
+                        lines = live.sourceLines,
                         english = sourceEnglish,
                         status = status,
                         background = Color.White,
@@ -223,6 +231,7 @@ private fun TranscriptPane(
     modifier: Modifier,
     language: String,
     text: String,
+    lines: List<LiveLine>,
     english: Boolean,
     status: String,
     background: Color,
@@ -231,9 +240,17 @@ private fun TranscriptPane(
     englishSpaceMs: Long,
 ) {
     val scroll = rememberScrollState()
-    LaunchedEffect(scroll.maxValue) {
-        if (text.isNotEmpty()) scroll.scrollTo(scroll.maxValue)
+    var follow by remember { mutableStateOf(true) }
+    val hasText = lines.any { it.text.isNotEmpty() } || text.isNotEmpty()
+    LaunchedEffect(scroll.value, scroll.maxValue) {
+        if (scroll.isScrollInProgress) {
+            follow = scroll.maxValue == 0 || scroll.value >= scroll.maxValue - 24
+        }
     }
+    LaunchedEffect(scroll.maxValue, lines, text) {
+        if (follow && hasText) scroll.scrollTo(scroll.maxValue)
+    }
+    val nowMs = System.currentTimeMillis()
     Column(
         modifier = modifier
             .background(background)
@@ -246,17 +263,49 @@ private fun TranscriptPane(
                 .fillMaxWidth()
                 .padding(top = 12.dp),
         ) {
-            FollowText(
-                text = text,
-                english = english,
-                fontSizeSp = typeScale.sp,
-                lineHeightSp = typeScale.lineHeight,
-                letterMs = englishLetterMs,
-                spaceMs = englishSpaceMs,
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(scroll),
-            )
+            ) {
+                if (lines.isNotEmpty()) {
+                    lines.forEach { line ->
+                        key(line.id) {
+                            if (line.typing) {
+                                FollowText(
+                                    text = line.text,
+                                    english = english,
+                                    fontSizeSp = typeScale.sp,
+                                    lineHeightSp = typeScale.lineHeight,
+                                    letterMs = englishLetterMs,
+                                    spaceMs = englishSpaceMs,
+                                    caret = true,
+                                    startUnrevealed = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            } else {
+                                FrozenLine(
+                                    text = line.text,
+                                    atMs = line.atMs,
+                                    nowMs = nowMs,
+                                    fontSizeSp = typeScale.sp,
+                                    lineHeightSp = typeScale.lineHeight,
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    FollowText(
+                        text = text,
+                        english = english,
+                        fontSizeSp = typeScale.sp,
+                        lineHeightSp = typeScale.lineHeight,
+                        letterMs = englishLetterMs,
+                        spaceMs = englishSpaceMs,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
         }
         Text(
             text = status,
@@ -268,6 +317,24 @@ private fun TranscriptPane(
 }
 
 @Composable
+private fun FrozenLine(
+    text: String,
+    atMs: Long,
+    nowMs: Long,
+    fontSizeSp: Int,
+    lineHeightSp: Int,
+) {
+    val focused = atMs == 0L || nowMs - atMs <= FOCUS_WINDOW_MS
+    Text(
+        text = text,
+        color = if (focused) Ink else FocusDim,
+        fontSize = fontSizeSp.sp,
+        lineHeight = lineHeightSp.sp,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
 private fun FollowText(
     text: String,
     english: Boolean,
@@ -276,8 +343,13 @@ private fun FollowText(
     letterMs: Long,
     spaceMs: Long,
     modifier: Modifier = Modifier,
+    caret: Boolean = true,
+    startUnrevealed: Boolean = false,
 ) {
-    val start = remember { initialCursor(text, System.currentTimeMillis()) }
+    val start = remember {
+        if (startUnrevealed) FollowCursor(emptyList(), 0, false)
+        else initialCursor(text, System.currentTimeMillis())
+    }
     var spans by remember { mutableStateOf(start.spans) }
     var revealed by remember { mutableIntStateOf(start.revealed) }
     var primed by remember { mutableStateOf(start.primed) }
@@ -297,12 +369,13 @@ private fun FollowText(
     LaunchedEffect(english, letterMs, spaceMs) {
         var marked = System.currentTimeMillis()
         while (true) {
+            snapshotFlow {
+                val full = spans.joinToString("") { it.text }
+                revealed to full
+            }.first { (shown, full) -> shown < full.length }
+            marked = System.currentTimeMillis()
             val full = spans.joinToString("") { it.text }
-            if (revealed >= full.length) {
-                delay(16L)
-                marked = System.currentTimeMillis()
-                continue
-            }
+            if (revealed >= full.length) continue
             delay(
                 typeDelayMs(
                     full[revealed],
@@ -350,8 +423,10 @@ private fun FollowText(
                 append(piece.text)
             }
         }
-        withStyle(SpanStyle(color = if (cursorOn) Ink else Color.Transparent)) {
-            append("▍")
+        if (caret) {
+            withStyle(SpanStyle(color = if (cursorOn) Ink else Color.Transparent)) {
+                append("▍")
+            }
         }
     }
     Text(

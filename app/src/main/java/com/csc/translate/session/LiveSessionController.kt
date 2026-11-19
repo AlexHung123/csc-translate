@@ -24,6 +24,8 @@ import com.csc.translate.pipeline.IndexTranslator
 import com.csc.translate.pipeline.QwenAsr
 import com.csc.translate.pipeline.Silero
 import com.csc.translate.pipeline.StretchSession
+import com.csc.translate.pipeline.liveSourceRows
+import com.csc.translate.pipeline.liveTargetRows
 import com.csc.translate.pipeline.mono
 import com.csc.translate.pipeline.probeAsr
 import com.csc.translate.pipeline.readWav
@@ -62,6 +64,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 enum class Phase { Idle, Connecting, Live, Finishing }
 
+data class LiveLine(
+    val id: Long,
+    val text: String,
+    val typing: Boolean,
+    val atMs: Long = 0L,
+)
+
 data class LiveUiState(
     val phase: Phase = Phase.Idle,
     val paused: Boolean = false,
@@ -69,6 +78,8 @@ data class LiveUiState(
     val direction: String = "en-zh",
     val sourceText: String = "",
     val targetText: String = "",
+    val sourceLines: List<LiveLine> = emptyList(),
+    val targetLines: List<LiveLine> = emptyList(),
     val startedAt: Long = 0L,
     val elapsedMs: Long = 0L,
     val watchUrl: String = "",
@@ -843,10 +854,32 @@ class LiveSessionController(
     }
 
     private fun publishTranscript() {
-        _state.update {
-            it.copy(
-                sourceText = sourceForDisplay(transcript.sourceRaw, it.direction),
+        val snap = asr?.liveView()
+        _state.update { current ->
+            val direction = current.direction
+            current.copy(
+                sourceText = sourceForDisplay(transcript.sourceRaw, direction),
                 targetText = targetForDisplay(transcript.targetRaw),
+                sourceLines = snap?.let { live ->
+                    liveSourceRows(live.lines, live.pending, live.pendingId).map { row ->
+                        LiveLine(
+                            id = row.id,
+                            text = sourceForDisplay(row.text, direction),
+                            typing = row.typing,
+                            atMs = row.atMs,
+                        )
+                    }
+                } ?: emptyList(),
+                targetLines = snap?.let { live ->
+                    liveTargetRows(live.lines, live.translatingId).map { row ->
+                        LiveLine(
+                            id = row.id,
+                            text = targetForDisplay(row.text),
+                            typing = row.typing,
+                            atMs = row.atMs,
+                        )
+                    }
+                } ?: emptyList(),
             )
         }
         noteRelay()
@@ -934,8 +967,8 @@ class LiveSessionController(
         typeScale = user.typeScale.key,
         englishPace = user.englishPace.key,
         englishLetterMs = user.typedLetterMs.toInt(),
-        sourceText = live.sourceText,
-        targetText = live.targetText,
+        sourceText = sourceForDisplay(transcript.sourceRaw, live.direction.ifBlank { user.direction }),
+        targetText = targetForDisplay(transcript.targetRaw),
         paused = live.paused,
         status = status,
     )

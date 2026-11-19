@@ -45,7 +45,8 @@ private const val ASR_FAILS = 5
  * Tomoru's live session does. A line that does not fit is left untranslated. Only a locked
  * sentence is sent to [translate]; the open Chinese tail stays untranslated until it locks.
  * Tokens of a locked line append on screen as they stream in. A call that exceeds
- * [translateLimitMs] is dropped so the next locked line can start.
+ * [translateLimitMs] is dropped so the next locked line can start. [onView] still
+ * receives the full session; [liveView] is every locked line plus the open tail.
  */
 internal class StretchSession(
     parent: CoroutineScope,
@@ -89,6 +90,9 @@ internal class StretchSession(
     private val hypothesis = Hypothesis()
     private val lines = mutableListOf<Line>()
     private var pending = ""
+    private var pendingId = 0L
+    private var nextId = 1L
+    private var translatingId = 0L
     private var shown = ""
     private var discarded = 0
 
@@ -125,6 +129,15 @@ internal class StretchSession(
     }
 
     fun snapshot(): Pair<String, String> = synchronized(lock) { source() to target() }
+
+    fun liveView(): LiveSnapshot = synchronized(lock) {
+        LiveSnapshot(
+            lines = lines.map { CaptionLine(it.id, it.src, it.tgt, it.atMs) },
+            pending = pending,
+            pendingId = pendingId,
+            translatingId = translatingId,
+        )
+    }
 
     /** For tests: returns once audio queued before the call has been decoded. */
     suspend fun awaitIdle() {
@@ -352,16 +365,23 @@ internal class StretchSession(
     private fun publish(newly: List<String>) {
         val view: Pair<String, String>
         synchronized(lock) {
-            for (sentence in newly) {
-                val line = Line(sentence)
-                lines += line
-                inflight.incrementAndGet()
-                if (translations.trySend(Work(lines.lastIndex, sentence)).isFailure) {
-                    inflight.decrementAndGet()
-                    warnTranslate("drop ${sentence.take(40)}")
+            if (newly.isEmpty()) {
+                pending = hypothesis.pending
+                if (pending.isBlank()) pendingId = 0L
+                else if (pendingId == 0L) pendingId = nextId++
+            } else {
+                for ((index, sentence) in newly.withIndex()) {
+                    val id = if (index == 0 && pendingId != 0L) pendingId else nextId++
+                    lines += Line(id, sentence)
+                    inflight.incrementAndGet()
+                    if (translations.trySend(Work(lines.lastIndex, sentence)).isFailure) {
+                        inflight.decrementAndGet()
+                        warnTranslate("drop ${sentence.take(40)}")
+                    }
                 }
+                pending = hypothesis.pending
+                pendingId = if (pending.isBlank()) 0L else nextId++
             }
-            pending = hypothesis.pending
             view = source() to target()
         }
         val (src, tgt) = view
@@ -375,6 +395,11 @@ internal class StretchSession(
     private suspend fun translateFinal(work: Work) {
         val started = System.currentTimeMillis()
         var first = true
+        val lineId = synchronized(lock) {
+            val id = lines.getOrNull(work.index)?.id ?: 0L
+            translatingId = id
+            id
+        }
         try {
             traceTranslate("start ${inflight.get()} ${work.text.take(40)}")
             val out = withTimeout(translateLimitMs) {
@@ -405,6 +430,9 @@ internal class StretchSession(
             // Keep any tokens already shown; a failed line with none stays blank.
             warnTranslate("fail ${work.text.take(40)}", t)
         } finally {
+            synchronized(lock) {
+                if (translatingId == lineId) translatingId = 0L
+            }
             inflight.decrementAndGet()
         }
     }
@@ -460,8 +488,10 @@ internal class StretchSession(
 }
 
 private class Line(
+    val id: Long,
     val src: String,
     var tgt: String = "",
+    val atMs: Long = System.currentTimeMillis(),
 )
 
 private data class Pending(
